@@ -1,0 +1,292 @@
+{
+  "id": "p8LowStock000001",
+  "name": "P8 · Low-stock alert (daily 08:00 Africa/Cairo)",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "a2d72da9-12db-5cff-ac2f-238dcefd7b1f",
+      "name": "Daily 08:00 Cairo",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "p8/low-stock",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "14db0f22-3151-5be7-a0e6-310d7139d5fa",
+      "name": "Run now (webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "p8WebhookCred001",
+          "name": "P8 run-now token"
+        }
+      },
+      "webhookId": "34ba3cda-d592-504c-9bb7-b5b09bb63c6b"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select * from p8_claim_low_stock_alerts();",
+        "options": {}
+      },
+      "id": "b55c11b1-a43f-5111-b427-dadd83e0399f",
+      "name": "Claim today's alerts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        100
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "p8PostgresCred01",
+          "name": "P8 Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// One HTML email for all SKUs claimed today, sorted by days of stock left (fewest first, \"no recent sales\" last).\nconst esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\nconst rows = $input.all().map((i) => i.json).filter((r) => r.sku);\nconst day = $now.setZone('Africa/Cairo').toISODate();\nif (rows.length === 0) {\n  return [{ json: { send: false, count: 0, day, ids: [] } }];\n}\nconst fmtDays = (d) => (d === null || d === undefined ? 'no recent sales' : Number(d) === 0 ? 'out of stock' : `${Number(d).toFixed(1)} days`);\nconst color = (d) => (d === null || d === undefined ? '#57606a' : Number(d) < 3 ? '#b42318' : Number(d) < 7 ? '#b54708' : '#1f2328');\nconst tr = rows.map((r) => `\n    <tr>\n      <td style=\"padding:6px 10px;border-bottom:1px solid #eaeef2;font-family:monospace\">${esc(r.sku)}</td>\n      <td style=\"padding:6px 10px;border-bottom:1px solid #eaeef2\">${esc(r.name)}</td>\n      <td style=\"padding:6px 10px;border-bottom:1px solid #eaeef2;text-align:right\">${esc(r.stock)}</td>\n      <td style=\"padding:6px 10px;border-bottom:1px solid #eaeef2;text-align:right\">${esc(r.reorder_point)}</td>\n      <td style=\"padding:6px 10px;border-bottom:1px solid #eaeef2;text-align:right\">${esc(r.units_14d)}</td>\n      <td style=\"padding:6px 10px;border-bottom:1px solid #eaeef2;text-align:right;font-weight:bold;color:${color(r.days_left)}\">${fmtDays(r.days_left)}</td>\n    </tr>`).join('');\nconst html = `\n<div style=\"font-family:Arial,sans-serif;font-size:14px;color:#1f2328;max-width:760px\">\n  <h2 style=\"margin:0 0 6px\">Low stock: ${rows.length} SKU${rows.length === 1 ? '' : 's'} below reorder point</h2>\n  <p style=\"margin:0 0 14px;color:#57606a\">${esc(day)} · sorted by days of stock left (stock ÷ average daily sales over the last 14 days)</p>\n  <table style=\"border-collapse:collapse;width:100%\">\n    <thead><tr style=\"background:#f6f8fa;text-align:left\">\n      <th style=\"padding:6px 10px\">SKU</th><th style=\"padding:6px 10px\">Product</th>\n      <th style=\"padding:6px 10px;text-align:right\">Stock</th><th style=\"padding:6px 10px;text-align:right\">Reorder point</th>\n      <th style=\"padding:6px 10px;text-align:right\">Sold (14 d)</th><th style=\"padding:6px 10px;text-align:right\">Days left</th>\n    </tr></thead>\n    <tbody>${tr}\n    </tbody>\n  </table>\n  <p style=\"color:#57606a;font-size:12px;margin-top:16px\">Each SKU is alerted at most once per day. P8 back-office automations · synthetic data</p>\n</div>`;\nconst text = [`Low stock ${day}: ${rows.length} SKU(s) below reorder point (synthetic data)`,\n  ...rows.map((r) => `${r.sku}  ${r.name}  stock ${r.stock}/${r.reorder_point}  sold14d ${r.units_14d}  ${fmtDays(r.days_left)}`)].join('\\n');\nreturn [{\n  json: {\n    send: true, count: rows.length, day, ids: rows.map((r) => Number(r.alert_id)), skus: rows.map((r) => r.sku),\n    subject: `[P8] Low stock: ${rows.length} SKU${rows.length === 1 ? '' : 's'} below reorder point (${day})`, html, text,\n  },\n}];\n"
+      },
+      "id": "6aaca2fa-b672-5639-b80c-a5f5cd5c78ba",
+      "name": "Build email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cec5eaa4-62c0-5d4c-b1b0-b276b2a6bf69",
+              "leftValue": "={{ $json.send }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "352b36e7-88c1-5ba3-9a25-e50bb8b1f5bb",
+      "name": "Anything to send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.ALERT_EMAIL_FROM }}",
+        "toEmail": "={{ $env.ALERT_EMAIL_TO }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "both",
+        "html": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        },
+        "text": "={{ $json.text }}"
+      },
+      "id": "148c6e8d-f5a9-5485-8ae7-f89a6464d56c",
+      "name": "Send low-stock email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        960,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "p8MailpitSmtp001",
+          "name": "P8 SMTP (Mailpit)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select p8_mark_alerts_sent($1::bigint[]) as marked;",
+        "options": {
+          "queryReplacement": "={{ [ '{' + $('Build email').first().json.ids.join(',') + '}' ] }}"
+        }
+      },
+      "id": "f956cc6c-72c9-5ec7-9bf8-10ee143b0d1a",
+      "name": "Mark alerts sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1200,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "p8PostgresCred01",
+          "name": "P8 Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $('Build email').first().json;\nconst marked = $input.first().json.marked;\nreturn [{ json: { ok: true, synthetic_data: true, day: e.day, alerted: e.count, skus: e.skus || [], marked_sent: marked ?? 0 } }];\n"
+      },
+      "id": "431d8e31-5c83-5d42-b313-d829871b5f92",
+      "name": "Alert summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $json;\nreturn [{ json: { ok: true, synthetic_data: true, day: e.day, alerted: 0, skus: [], marked_sent: 0, note: 'nothing new to alert today' } }];\n"
+      },
+      "id": "8aa52cfc-fc02-592d-b6a7-bba4e44ba0d1",
+      "name": "Nothing to send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 08:00 Cairo": {
+      "main": [
+        [
+          {
+            "node": "Claim today's alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now (webhook)": {
+      "main": [
+        [
+          {
+            "node": "Claim today's alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim today's alerts": {
+      "main": [
+        [
+          {
+            "node": "Build email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build email": {
+      "main": [
+        [
+          {
+            "node": "Anything to send?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anything to send?": {
+      "main": [
+        [
+          {
+            "node": "Send low-stock email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nothing to send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send low-stock email": {
+      "main": [
+        [
+          {
+            "node": "Mark alerts sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark alerts sent": {
+      "main": [
+        [
+          {
+            "node": "Alert summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Cairo",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "p8ErrorHandler01"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

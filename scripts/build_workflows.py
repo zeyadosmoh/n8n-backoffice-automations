@@ -168,6 +168,28 @@ def orders_sync() -> Workflow:
     return w
 
 
+def low_stock_alert() -> Workflow:
+    w = Workflow("p8LowStock000001", "P8 · Low-stock alert (daily 08:00 Africa/Cairo)")
+    w.node("Daily 08:00 Cairo", "n8n-nodes-base.scheduleTrigger", 1.2,
+           {"rule": {"interval": [{"field": "cronExpression", "expression": "0 8 * * *"}]}}, (0, 0))
+    w.webhook("Run now (webhook)", "p8/low-stock", (0, 200))
+    w.sql("Claim today's alerts", "select * from p8_claim_low_stock_alerts();", (240, 100), alwaysOutputData=True)
+    w.code("Build email", "low_stock_email", (480, 100))
+    w.if_true("Anything to send?", "={{ $json.send }}", True, (720, 100), op="true", kind="boolean")
+    w.email("Send low-stock email", "={{ $json.subject }}", "={{ $json.html }}", (960, 0), text="={{ $json.text }}")
+    w.sql("Mark alerts sent", "select p8_mark_alerts_sent($1::bigint[]) as marked;", (1200, 0),
+          params="={{ [ '{' + $('Build email').first().json.ids.join(',') + '}' ] }}")
+    w.code("Alert summary", "low_stock_summary", (1440, 0))
+    w.code("Nothing to send", "low_stock_nothing", (960, 220))
+    w.connect("Daily 08:00 Cairo", "Claim today's alerts")
+    w.connect("Run now (webhook)", "Claim today's alerts")
+    w.chain("Claim today's alerts", "Build email", "Anything to send?")
+    w.connect("Anything to send?", "Send low-stock email", 0)
+    w.connect("Anything to send?", "Nothing to send", 1)
+    w.chain("Send low-stock email", "Mark alerts sent", "Alert summary")
+    return w
+
+
 def error_handler() -> Workflow:
     w = Workflow(ERROR_WORKFLOW_ID, "P8 · Error handler (failure email)", error_workflow=False)
     w.node("On workflow error", "n8n-nodes-base.errorTrigger", 1, {}, (0, 0))
@@ -177,7 +199,7 @@ def error_handler() -> Workflow:
     return w
 
 
-WORKFLOWS = {"orders_sync": orders_sync, "error_handler": error_handler}
+WORKFLOWS = {"orders_sync": orders_sync, "low_stock_alert": low_stock_alert, "error_handler": error_handler}
 
 
 def render() -> dict[str, str]:
