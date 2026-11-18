@@ -96,8 +96,11 @@ with os.fdopen(fd, "w") as f:
     json.dump(creds, f)
 PY
 
+# Files are streamed in (not `docker cp`) so the container's own user creates them: `docker cp` keeps the host
+# owner (e.g. uid 1001 on GitHub runners), and n8n (uid 1000) could not read a 0600 credential file.
+put() { docker exec -i "$C" sh -c "umask 077; cat > '$2'" < "$1"; }
 docker exec "$C" mkdir -p /tmp/p8-import
-docker cp "$TMP/creds.cred.json" "$C:/tmp/p8-import/creds.json" >/dev/null
+put "$TMP/creds.cred.json" /tmp/p8-import/creds.json
 rm -f "$TMP/creds.cred.json"
 out=$(docker exec "$C" n8n import:credentials --input=/tmp/p8-import/creds.json 2>&1) || { echo "$out" >&2; exit 1; }
 echo "$out" | grep -E "Successfully" || true
@@ -105,7 +108,7 @@ docker exec -u root "$C" rm -f /tmp/p8-import/creds.json
 
 ids=()
 for wf in workflows/*.json; do
-  docker cp "$wf" "$C:/tmp/p8-import/$(basename "$wf")" >/dev/null
+  put "$wf" "/tmp/p8-import/$(basename "$wf")"
   out=$(docker exec "$C" n8n import:workflow --input="/tmp/p8-import/$(basename "$wf")" 2>&1) \
     || { echo "$out" >&2; echo "import failed: $wf" >&2; exit 1; }
   echo "$out" | grep -E "Successfully" || true
