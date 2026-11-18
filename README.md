@@ -17,7 +17,8 @@ fails on purpose.
 | **3. Supplier price list** | n8n Form upload | CSV/XLSX → validate (required columns, numeric prices > 0, duplicate SKUs, unknown SKUs) → diff against current prices → apply valid rows in **one transaction** → summary email + rejects file with a reason per row. Optional AI name-to-SKU matching that only ever fills a **review list**. |
 | **Error handler** | n8n Error Trigger | Emails the workflow, failing node, message and a link to the execution. |
 
-Screenshots: see [Screenshots](#screenshots).
+![Mailpit inbox with the P8 emails](docs/img/mailpit-inbox.png)
+*Every workflow reports by email: alerts, import summaries, failures.*
 
 ## What this proves
 
@@ -108,6 +109,9 @@ committed export is out of date.
 
 ### Workflow 1 · Orders sync
 
+![Workflow 1 in the n8n editor](docs/img/wf-orders-sync.png)
+*The fetch → check → retry/apply loop (top) and the daily Excel export branch (bottom).*
+
 `Every hour (:05)` or `Run now (webhook)` → **Load cursors** → **Start streams** → loop:
 **Next request** → **Fetch page** (HTTP, store credential) → **Check response** → **Retry or apply?**
 - 429 → **Back off** for `Retry-After` seconds, then loop. 429s have their own budget of 20 waits.
@@ -136,6 +140,9 @@ and a mail outage doesn't silently drop alerts.
 
 Days left = stock ÷ (units sold in the last 14 days ÷ 14), counting non-cancelled orders only. No sales gives "no
 recent sales", sorted last.
+
+![Low-stock alert email](docs/img/email-low-stock.png)
+*One email per day, sorted by days of stock left.*
 
 ### Workflow 3 · Supplier price list
 
@@ -166,12 +173,21 @@ the counts on the form's completion page.
 - Lower confidence, an invented SKU, or an API error rejects the row with the reason.
 - Tests and CI use a word-overlap **fake** Gemini endpoint in the mock store, so no key is needed.
 
+![Price-list summary email](docs/img/email-price-list.png)
+*Summary for `pricelist_bad.csv`: 3 prices applied in one transaction, 9 rows rejected, large changes highlighted.*
+
+![Rejects file](docs/img/rejects-csv.png)
+*The attached rejects file: one reason per row, with spreadsheet row numbers.*
+
 ### Error handler
 
 Each workflow sets `settings.errorWorkflow` to it. The email contains the workflow name and id, the node, the error
 message, the mode, the Cairo time, and `<N8N_EDITOR_BASE_URL>/workflow/<id>/executions/<execution id>`. The base URL
 comes from the `N8N_EDITOR_BASE_URL` setting (default `http://localhost:5680`); the e2e stack sets it to
 `http://localhost:5681` and checks the link.
+
+![Failure email](docs/img/email-failure.png)
+*The store API returned 500 on every call: the email names the workflow, the node, the error and the execution.*
 
 ## Quickstart (from zero)
 
@@ -285,19 +301,13 @@ tests/e2e/test_workflows_e2e.py         13  real n8n: tokens, sync twice = same 
 
 ## Screenshots
 
-Taken from the local run above. Files go in `docs/img/`.
+Taken from the local run above. All addresses are `example.com` placeholders and all data is synthetic.
 
 | File | What it shows |
 |---|---|
-| `wf-orders-sync.png` | Workflow 1 canvas: the fetch → check → retry/apply loop and the Excel export branch |
-| `wf-low-stock.png` | Workflow 2 canvas |
-| `wf-price-list.png` | Workflow 3 canvas, including the AI branch |
-| `wf-error-handler.png` | Error handler canvas |
-| `executions.png` | n8n executions list with successful runs and the failed run under 500s |
-| `email-low-stock.png` | Low-stock email in Mailpit (3 SKUs sorted by days left) |
-| `form-upload.png` | Price-list upload form |
-| `form-result.png` | "Price list processed" completion page with the counts |
-| `email-price-list.png` | Summary email for `pricelist_bad.csv` with `rejects_*.csv` attached |
-| `rejects-csv.png` | The rejects file opened (row, SKU, name, price, reason) |
-| `email-failure.png` | Failure email (workflow, node, message, execution link) |
-| `excel-export.png` | `exports/orders_2026-11-17.xlsx` opened |
+| [`mailpit-inbox.png`](docs/img/mailpit-inbox.png) | Mailpit inbox with every email from the run: price-list summaries, low-stock alerts, failure |
+| [`wf-orders-sync.png`](docs/img/wf-orders-sync.png) | Workflow 1 canvas: the fetch → check → retry/apply loop and the Excel export branch |
+| [`email-low-stock.png`](docs/img/email-low-stock.png) | Low-stock email (3 SKUs sorted by days left) |
+| [`email-price-list.png`](docs/img/email-price-list.png) | Summary email for `pricelist_bad.csv` |
+| [`rejects-csv.png`](docs/img/rejects-csv.png) | The rejects file opened (row, SKU, name, price, reason) |
+| [`email-failure.png`](docs/img/email-failure.png) | Failure email (workflow, node, message, execution link) |
