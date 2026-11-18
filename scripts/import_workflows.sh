@@ -46,11 +46,28 @@ for f in sorted(glob.glob("workflows/*.json")):
   return 1
 }
 
+# The server must finish its own start-up (first start = database migrations) before any CLI command touches the
+# same database, or the two race on the migrations.
+wait_for_ready() {
+  for _ in $(seq 1 180); do
+    if docker exec "$C" node -e '
+      fetch("http://127.0.0.1:5678/healthz/readiness").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1));
+    ' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "n8n did not become ready" >&2
+  return 1
+}
+
 if [ "${WAIT_ONLY:-0}" = "1" ]; then
   wait_for_webhooks && echo "n8n webhooks ready"
   exit $?
 fi
 
+
+wait_for_ready
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"; docker exec -u root "$C" rm -rf /tmp/p8-import >/dev/null 2>&1 || true' EXIT
@@ -82,17 +99,21 @@ PY
 docker exec "$C" mkdir -p /tmp/p8-import
 docker cp "$TMP/creds.cred.json" "$C:/tmp/p8-import/creds.json" >/dev/null
 rm -f "$TMP/creds.cred.json"
-docker exec "$C" n8n import:credentials --input=/tmp/p8-import/creds.json 2>&1 | grep -E "Successfully|Error" || true
+out=$(docker exec "$C" n8n import:credentials --input=/tmp/p8-import/creds.json 2>&1) || { echo "$out" >&2; exit 1; }
+echo "$out" | grep -E "Successfully" || true
 docker exec -u root "$C" rm -f /tmp/p8-import/creds.json
 
 ids=()
 for wf in workflows/*.json; do
   docker cp "$wf" "$C:/tmp/p8-import/$(basename "$wf")" >/dev/null
-  docker exec "$C" n8n import:workflow --input="/tmp/p8-import/$(basename "$wf")" 2>&1 | grep -E "Successfully|Error" || true
+  out=$(docker exec "$C" n8n import:workflow --input="/tmp/p8-import/$(basename "$wf")" 2>&1) \
+    || { echo "$out" >&2; echo "import failed: $wf" >&2; exit 1; }
+  echo "$out" | grep -E "Successfully" || true
   ids+=("$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$wf")")
 done
 for id in "${ids[@]}"; do
-  docker exec "$C" n8n publish:workflow --id="$id" 2>&1 | grep -iE "publish|error" | tail -1 || true
+  out=$(docker exec "$C" n8n publish:workflow --id="$id" 2>&1) || { echo "$out" >&2; echo "publish failed: $id" >&2; exit 1; }
+  echo "$out" | grep -iE "publishing" | tail -1
 done
 
 if [ "$RESTART" = "1" ]; then

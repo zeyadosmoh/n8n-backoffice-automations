@@ -18,7 +18,7 @@ def migrate(conn: psycopg.Connection) -> list[str]:
         "create table if not exists schema_migrations (version text primary key, applied_at timestamptz default now())"
     )
     conn.commit()
-    done = {r[0] for r in conn.execute("select version from schema_migrations")}
+    done = {r["version"] if isinstance(r, dict) else r[0] for r in conn.execute("select version from schema_migrations")}
     applied = []
     for path in sorted(Path(MIGRATIONS).glob("*.sql")):
         if path.name in done:

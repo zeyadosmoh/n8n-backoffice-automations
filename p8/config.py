@@ -8,8 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def load_env(path: Path | None = None) -> dict[str, str]:
-    """Values from .env (if present) overridden by the real environment."""
+def load_env(path: Path | None = None, use_environ: bool = True) -> dict[str, str]:
+    """Values from .env (if present), overridden by the real environment unless use_environ=False."""
     values: dict[str, str] = {}
     path = path or ROOT / ".env"
     if path.exists():
@@ -19,7 +19,8 @@ def load_env(path: Path | None = None) -> dict[str, str]:
                 continue
             k, v = line.split("=", 1)
             values[k.strip()] = v.strip()
-    values.update({k: v for k, v in os.environ.items()})
+    if use_environ:
+        values.update(os.environ)
     return values
 
 

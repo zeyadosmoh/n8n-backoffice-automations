@@ -1,0 +1,167 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # CI-only values for throwaway databases. No API keys anywhere: AI matching uses the mock store's fake endpoint.
+  POSTGRES_USER: p8
+  POSTGRES_PASSWORD: ci-only-password
+  POSTGRES_DB: p8
+  POSTGRES_HOST: 127.0.0.1
+
+jobs:
+  secret-scan:
+    name: secret scan + workflow leak check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secret scan (tracked files) and n8n workflow leak check
+        run: bash scripts/secret-scan.sh
+      - name: Workflow JSON matches its generator
+        run: python3 scripts/build_workflows.py --check
+
+  unit:
+    name: unit + SQL tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_USER: p8
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: p8
+        ports: ["5438:5432"]
+        options: >-
+          --health-cmd "pg_isready -U p8 -d p8"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      POSTGRES_PORT: "5438"
+      REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install -e '.[dev]'
+      - name: Unit tests (mock store, SQL functions, samples, workflow checks)
+        run: python -m pytest tests/unit
+
+  e2e:
+    name: end-to-end (n8n 2.47.2 service containers)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_USER: p8
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: p8
+          TZ: Africa/Cairo
+        ports: ["5439:5432"]
+        options: >-
+          --health-cmd "pg_isready -U p8 -d p8"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      mailpit:
+        image: axllent/mailpit:v1.32.0
+        ports: ["1027:1025", "8027:8025"]
+      n8n:
+        image: n8nio/n8n:2.47.2
+        ports: ["5681:5678"]
+        volumes:
+          - /tmp/p8-exports:/files/exports
+        env:
+          N8N_HOST: localhost
+          N8N_PORT: "5678"
+          N8N_PROTOCOL: http
+          N8N_WEBHOOK_URL: http://localhost:5681/
+          N8N_EDITOR_BASE_URL: http://localhost:5681
+          GENERIC_TIMEZONE: Africa/Cairo
+          TZ: Africa/Cairo
+          N8N_DIAGNOSTICS_ENABLED: "false"
+          N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+          N8N_PERSONALIZATION_ENABLED: "false"
+          N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+          N8N_RESTRICT_FILE_ACCESS_TO: /files/exports
+          ALERT_EMAIL_FROM: automations@store.example.com
+          ALERT_EMAIL_TO: ops@store.example.com
+          AI_MATCH_ENABLED: "true"
+          AI_MATCH_MIN_CONFIDENCE: "0.85"
+          LLM_MODEL: gemini-3.5-flash-lite
+          GEMINI_API_BASE: http://mock-store:8000/_fake_gemini/v1beta
+          STORE_API_BASE: http://mock-store:8000/admin/api/2025-10
+    env:
+      E2E_EXTERNAL: "1"
+      REQUIRE_N8N: "1"
+      POSTGRES_PORT: "5439"
+      N8N_PORT_HOST: "5681"
+      MAILPIT_UI_PORT: "8027"
+      MOCK_STORE_PORT: "8781"
+      EXPORTS_DIR: /tmp/p8-exports
+      N8N_EDITOR_BASE_URL: http://localhost:5681
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install -e '.[dev]'
+
+      - name: Per-run random tokens (masked)
+        run: |
+          for v in STORE_API_TOKEN MOCK_ADMIN_TOKEN N8N_WEBHOOK_TOKEN; do
+            val="ci_$(openssl rand -hex 20)"
+            echo "::add-mask::$val"
+            echo "$v=$val" >> "$GITHUB_ENV"
+          done
+
+      - name: Mock store container on the services network (127.0.0.1:8781)
+        run: |
+          docker build -q -f mock_store/Dockerfile -t p8-mock-store:ci .
+          docker run -d --name mock-store --network "${{ job.services.n8n.network }}" --network-alias mock-store \
+            -p 127.0.0.1:8781:8000 -e STORE_API_TOKEN -e MOCK_ADMIN_TOKEN -e TZ=Africa/Cairo p8-mock-store:ci
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8781/healthz && break; sleep 1; done
+
+      - name: Exports folder writable by n8n (uid 1000)
+        run: sudo mkdir -p /tmp/p8-exports && sudo chmod 777 /tmp/p8-exports
+
+      - name: Import credentials + workflows into the n8n service and publish them
+        run: |
+          umask 077
+          {
+            echo "POSTGRES_USER=$POSTGRES_USER"; echo "POSTGRES_PASSWORD=$POSTGRES_PASSWORD"
+            echo "POSTGRES_DB=$POSTGRES_DB"; echo "STORE_API_TOKEN=$STORE_API_TOKEN"
+            echo "N8N_WEBHOOK_TOKEN=$N8N_WEBHOOK_TOKEN"; echo "GEMINI_API_KEY="
+          } > "$RUNNER_TEMP/ci.env"
+          ENV_FILE="$RUNNER_TEMP/ci.env" N8N_CONTAINER="${{ job.services.n8n.id }}" \
+            PG_HOST=postgres SMTP_HOST=mailpit scripts/import_workflows.sh
+          rm -f "$RUNNER_TEMP/ci.env"
+
+      - name: End-to-end tests (skips fail with REQUIRE_N8N=1)
+        run: python -m pytest tests/e2e -v
+
+      - name: n8n and mock store logs on failure
+        if: failure()
+        run: |
+          docker logs "${{ job.services.n8n.id }}" 2>&1 | tail -200
+          docker logs mock-store 2>&1 | tail -50
