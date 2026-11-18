@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Lightweight secret scan. Uses gitleaks when installed; otherwise a grep fallback.
+# Lightweight secret scan. Uses gitleaks when installed; otherwise a grep fallback. Always runs the n8n workflow
+# leak check (scripts/check_workflows_clean.py) as well.
 # Scans files that are staged (or tracked, if nothing is staged).
 # Usage: bash scripts/secret-scan.sh   -> exit 0 = clean, exit 1 = findings
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 if command -v gitleaks >/dev/null 2>&1; then
-  exec gitleaks protect --staged --redact --no-banner
+  gitleaks protect --staged --redact --no-banner
+  exec python3 scripts/check_workflows_clean.py
 fi
 
 mapfile -t FILES < <(git diff --cached --name-only --diff-filter=ACM)
@@ -40,7 +42,7 @@ PATTERNS=(
   '(password|passwd|secret|api_key)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{6,}'
 )
 EXISTING=()
-for f in "${FILES[@]}"; do [ -f "$f" ] && [ "$f" != "scripts/secret-scan.sh" ] && EXISTING+=("$f"); done
+for f in "${FILES[@]}"; do [ -f "$f" ] && [ "$f" != "scripts/secret-scan.sh" ] && [ "$f" != "scripts/check_workflows_clean.py" ] && EXISTING+=("$f"); done
 
 if [ ${#EXISTING[@]} -gt 0 ]; then
   for p in "${PATTERNS[@]}"; do
@@ -60,6 +62,9 @@ if [ ${#EXISTING[@]} -gt 0 ]; then
     fi
   fi
 fi
+
+# 4) Exported n8n workflows: credentials by reference only, no .env secret values (incl. the webhook token).
+if ! python3 scripts/check_workflows_clean.py; then fail=1; fi
 
 if [ $fail -eq 0 ]; then echo "SECRET-SCAN: clean (${#EXISTING[@]} files checked)"; fi
 exit $fail
