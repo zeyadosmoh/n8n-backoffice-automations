@@ -50,10 +50,10 @@ def test_full_sync_then_second_run_changes_nothing(stack):
     stack.x("truncate orders, order_items, sync_state cascade")
     r = stack.run("p8/orders-sync")
     assert r.status_code == 200, r.text
-    first = r.json()
     n_store = store_orders(stack)
-    assert first["orders"]["received"] == first["orders"]["changed"] == n_store
+    # DB state, not the run's counters: the hourly schedule of the same n8n may run at :05 alongside the test
     assert counts(stack)["orders"] == n_store
+    assert r.json()["orders"]["received"] >= n_store
     inv = stack.admin("state")["inventory"]
     db_stock = {x["sku"]: x["stock"] for x in stack.q("select sku, stock from products")}
     assert db_stock == {k: max(0, v) for k, v in inv.items()}
@@ -64,23 +64,30 @@ def test_full_sync_then_second_run_changes_nothing(stack):
     assert stack.q(TABLES_SNAPSHOT)[0] == before
 
 
+def synced(stack, ids) -> dict[int, str]:
+    rows = stack.q("select id, coalesce(fulfillment_status, '-') f from orders where id = any(%s)", (list(ids),))
+    return {r["id"]: r["f"] for r in rows}
+
+
 def test_sync_survives_500s_and_429s(stack):
     stack.calm()
-    stack.admin("simulate", {"random_orders": 25, "updated_orders": 5})
+    sim = stack.admin("simulate", {"random_orders": 25, "updated_orders": 5})
     stack.admin("faults", {"fail_next": 2, "bucket_size": 1, "leak_rps": 1, "reset_counters": True})
     r = stack.run("p8/orders-sync")
     stack.calm()
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["retries"] >= 2 and out["rate_limited"] >= 1
-    assert out["orders"]["changed"] == 30
+    got = synced(stack, sim["created"] + sim["updated"])
+    assert set(got) == set(sim["created"]) | set(sim["updated"])
+    assert all(got[i] == "fulfilled" for i in sim["updated"])
     assert counts(stack)["orders"] == store_orders(stack)
 
 
 def test_api_500s_send_failure_email_and_keep_cursor(stack):
     stack.calm()
     stack.clear_mail()
-    stack.admin("simulate", {"random_orders": 3})
+    sim = stack.admin("simulate", {"random_orders": 3})
     before = stack.q(TABLES_SNAPSHOT)[0]
     stack.admin("faults", {"fail_next": 1000})
     r = stack.run("p8/orders-sync")
@@ -94,8 +101,8 @@ def test_api_500s_send_failure_email_and_keep_cursor(stack):
     # Change B: the link comes from N8N_EDITOR_BASE_URL (http://localhost:5681 in the e2e stack)
     assert f"Execution: {stack.editor_base}/workflow/p8OrdersSync0001/executions/" in text
     # the next healthy run picks the 3 orders up
-    after = stack.run("p8/orders-sync").json()
-    assert after["orders"]["changed"] == 3
+    assert stack.run("p8/orders-sync").status_code == 200
+    assert set(synced(stack, sim["created"])) == set(sim["created"])
 
 
 def test_daily_excel_export(stack):
