@@ -97,3 +97,22 @@ def test_detects_real_email(tmp_path):
     wf = copy.deepcopy(load("error_handler"))
     wf["nodes"][-1]["parameters"]["toEmail"] = "someone@" + "gmail.com"
     assert any("email" in p for p in problems(tmp_path, wf))
+
+
+def test_detects_shopify_client_secret_value(tmp_path):
+    fake = "shpss_" + "0f" * 16
+    wf = load("orders_sync")
+    wf["nodes"][0]["notes"] = f"client secret {fake}"
+    found = problems(tmp_path, wf, {"SHOPIFY_CLIENT_SECRET": fake})
+    assert any("SHOPIFY_CLIENT_SECRET" in p for p in found)
+
+
+@pytest.mark.parametrize("prefix", ["shpat_", "shpca_", "shpss_", "shppa_"])
+def test_detects_every_shopify_token_shape(tmp_path, prefix):
+    wf = load("orders_sync")
+    wf["nodes"][0]["notes"] = prefix + "9c" * 16
+    assert any("Shopify-style token" in p for p in problems(tmp_path, wf))
+
+
+def test_client_secret_is_a_checked_secret():
+    assert "SHOPIFY_CLIENT_SECRET" in check.SECRET_VARS

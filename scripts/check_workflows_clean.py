@@ -3,7 +3,7 @@
 Checks every workflows/*.json:
   1. credentials are referenced by id + name only (no `data` / secret fields next to them);
   2. no value of a secret from .env (or the environment) appears anywhere in the file, including the run-now
-     webhook token N8N_WEBHOOK_TOKEN;
+     webhook token N8N_WEBHOOK_TOKEN and the Shopify app's SHOPIFY_CLIENT_SECRET;
   3. no token-shaped strings (Shopify/Google/GitHub tokens, private keys, bearer headers) and no hard-coded
      auth headers in HTTP/webhook nodes;
   4. every run-now webhook uses Header Auth with the shared credential, and email addresses are placeholders only;
@@ -21,10 +21,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SECRET_VARS = ["N8N_WEBHOOK_TOKEN", "STORE_API_TOKEN", "MOCK_ADMIN_TOKEN", "POSTGRES_PASSWORD", "GEMINI_API_KEY"]
+SECRET_VARS = ["N8N_WEBHOOK_TOKEN", "STORE_API_TOKEN", "MOCK_ADMIN_TOKEN", "POSTGRES_PASSWORD", "GEMINI_API_KEY",
+               "SHOPIFY_CLIENT_SECRET"]
 PLACEHOLDERS = {"", "change-me", "shpat_change-me"}
 TOKEN_PATTERNS = {
-    "Shopify-style token": r"shp(at|ss|ca)_[0-9a-fA-F]{16,}",
+    # shpat_ (admin token), shpca_ (client-credentials token), shpss_ (client secret), shppa_ (private app)
+    "Shopify-style token": r"shp(at|ss|ca|pa)_[0-9A-Za-z]{16,}",
     "Google API key": r"AIza[0-9A-Za-z_-]{35}",
     "GitHub token": r"gh[pousr]_[0-9A-Za-z]{36}",
     "private key": r"-----BEGIN [A-Z ]*PRIVATE KEY-----",

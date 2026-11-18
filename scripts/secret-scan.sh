@@ -37,7 +37,7 @@ PATTERNS=(
   '"client_secret"[[:space:]]*:'
   '-----BEGIN [A-Z ]*PRIVATE KEY-----'
   'gh[pousr]_[0-9A-Za-z]{36}'                 # GitHub tokens
-  'shp(at|ss|ca)_[0-9a-fA-F]{32}'             # Shopify-style access tokens
+  'shp(at|ss|ca|pa)_[0-9A-Za-z]{16,}'         # Shopify tokens (shpat_/shpca_) and client secrets (shpss_)
   '"(encryptionKey|accessToken|apiKey)"[[:space:]]*:[[:space:]]*"[^"]{6,}'
   '(password|passwd|secret|api_key)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{6,}'
 )
@@ -46,12 +46,37 @@ for f in "${FILES[@]}"; do [ -f "$f" ] && [ "$f" != "scripts/secret-scan.sh" ] &
 
 if [ ${#EXISTING[@]} -gt 0 ]; then
   for p in "${PATTERNS[@]}"; do
-    if out=$(grep -nEI -e "$p" -- "${EXISTING[@]}" 2>/dev/null); then
-      report "pattern '$p' matched:"; echo "$out"
+    # file:line only: a matched line would echo the token/secret itself
+    if out=$(grep -HnEI -e "$p" -- "${EXISTING[@]}" 2>/dev/null | cut -d: -f1,2); then
+      report "pattern '$p' matched at (line not shown):"; echo "$out"
     fi
   done
 
-  # 3) Real-looking email addresses. Ignores samples/ and placeholder domains.
+  # 3) The literal values of the secrets in .env (Shopify client secret, tokens, passwords). Only file:line is
+  #    printed, never the matching line, so a hit does not echo the secret.
+  if [ -f .env ]; then
+    VALS=$(mktemp); chmod 600 "$VALS"
+    python3 - "$VALS" <<'PY'
+import sys
+keys = {"SHOPIFY_CLIENT_SECRET", "STORE_API_TOKEN", "MOCK_ADMIN_TOKEN", "N8N_WEBHOOK_TOKEN", "POSTGRES_PASSWORD",
+        "GEMINI_API_KEY"}
+skip = {"", "change-me", "shpat_change-me"}
+vals = []
+for line in open(".env"):
+    if "=" in line and not line.lstrip().startswith("#"):
+        k, v = line.split("=", 1)
+        v = v.strip()
+        if k.strip() in keys and v not in skip and len(v) >= 8:
+            vals.append(v)
+open(sys.argv[1], "w").write("\n".join(vals) + ("\n" if vals else ""))
+PY
+    if [ -s "$VALS" ] && out=$(grep -HnFI -f "$VALS" -- "${EXISTING[@]}" 2>/dev/null | cut -d: -f1,2); then
+      report "value of a secret from .env found at (line not shown):"; echo "$out"
+    fi
+    rm -f "$VALS"
+  fi
+
+  # 4) Real-looking email addresses. Ignores samples/ and placeholder domains.
   EMAIL_FILES=()
   for f in "${EXISTING[@]}"; do case "$f" in tests/fixtures/*) ;; *) EMAIL_FILES+=("$f") ;; esac; done
   if [ ${#EMAIL_FILES[@]} -gt 0 ]; then
@@ -63,7 +88,7 @@ if [ ${#EXISTING[@]} -gt 0 ]; then
   fi
 fi
 
-# 4) Exported n8n workflows: credentials by reference only, no .env secret values (incl. the webhook token).
+# 5) Exported n8n workflows: credentials by reference only, no .env secret values (incl. the webhook token).
 if ! python3 scripts/check_workflows_clean.py; then fail=1; fi
 
 if [ $fail -eq 0 ]; then echo "SECRET-SCAN: clean (${#EXISTING[@]} files checked)"; fi
