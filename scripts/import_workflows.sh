@@ -4,6 +4,7 @@
 #   scripts/import_workflows.sh                      # compose project "p8", values from .env
 #   ENV_FILE=.e2e/.env PROJECT=p8-e2e scripts/import_workflows.sh
 #   N8N_CONTAINER=<id> PG_HOST=postgres SMTP_HOST=mailpit scripts/import_workflows.sh   # e.g. CI service containers
+#   WAIT_ONLY=1 scripts/import_workflows.sh          # only wait until every webhook/form is registered
 #
 # The credential file is built from .env in a private temp file, copied into the container, imported and deleted
 # on both sides. The workflow JSON files contain credential ids and names only, never secrets.
@@ -18,6 +19,38 @@ set -a; . "$ENV_FILE"; set +a
 C=${N8N_CONTAINER:-$(docker compose -p "$PROJECT" ps -q n8n)}
 [ -n "$C" ] || { echo "n8n container for project $PROJECT is not running" >&2; exit 1; }
 RESTART=${RESTART:-1}
+
+# Webhook paths of the published workflows; n8n is "ready" only when none of them answers 404 any more.
+wait_for_webhooks() {
+  local paths
+  paths=$(python3 -c '
+import json, glob
+for f in sorted(glob.glob("workflows/*.json")):
+    for n in json.load(open(f))["nodes"]:
+        if n["type"] == "n8n-nodes-base.webhook":
+            print("POST webhook/" + n["parameters"]["path"])
+        elif n["type"] == "n8n-nodes-base.formTrigger":
+            print("GET form/" + n["parameters"]["options"]["path"])
+')
+  for _ in $(seq 1 120); do
+    if docker exec -e PATHS="$paths" "$C" node -e '
+      const paths = process.env.PATHS.split("\n").filter(Boolean).map(l => l.split(" "));
+      Promise.all(paths.map(([m, p]) => fetch("http://127.0.0.1:5678/" + p, {method: m}).then(r => r.status)))
+        .then(s => process.exit(s.every(x => x !== 404) ? 0 : 1)).catch(() => process.exit(1));
+    ' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "n8n did not register the webhooks in time" >&2
+  return 1
+}
+
+if [ "${WAIT_ONLY:-0}" = "1" ]; then
+  wait_for_webhooks && echo "n8n webhooks ready"
+  exit $?
+fi
+
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"; docker exec -u root "$C" rm -rf /tmp/p8-import >/dev/null 2>&1 || true' EXIT
@@ -62,28 +95,9 @@ for id in "${ids[@]}"; do
   docker exec "$C" n8n publish:workflow --id="$id" 2>&1 | grep -iE "publish|error" | tail -1 || true
 done
 
-# Webhook paths of the published workflows; n8n is "ready" only when none of them answers 404 any more.
-PATHS=$(python3 -c '
-import json, glob
-for f in sorted(glob.glob("workflows/*.json")):
-    for n in json.load(open(f))["nodes"]:
-        if n["type"] in ("n8n-nodes-base.webhook", "n8n-nodes-base.formTrigger"):
-            print(n["parameters"]["path"])
-')
-
 if [ "$RESTART" = "1" ]; then
   docker restart "$C" >/dev/null
   echo "restarted n8n; waiting for its webhooks"
-  for _ in $(seq 1 120); do
-    if docker exec -e PATHS="$PATHS" "$C" node -e '
-      const paths = process.env.PATHS.split("\n").filter(Boolean);
-      Promise.all(paths.map(p => fetch("http://127.0.0.1:5678/" + (p.includes("form") ? "form/" : "webhook/") + p,
-                                       {method: p.includes("form") ? "GET" : "POST"}).then(r => r.status)))
-        .then(s => process.exit(s.every(x => x !== 404) ? 0 : 1)).catch(() => process.exit(1));
-    ' >/dev/null 2>&1; then
-      echo "n8n ready: ${#ids[@]} workflows imported and published"; exit 0
-    fi
-    sleep 1
-  done
-  echo "n8n did not register the webhooks in time" >&2; exit 1
+  wait_for_webhooks
+  echo "n8n ready: ${#ids[@]} workflows imported and published"
 fi

@@ -190,6 +190,86 @@ def low_stock_alert() -> Workflow:
     return w
 
 
+def switch_kind(w: Workflow, name, pos, cases):
+    rules = []
+    for value, label in cases:
+        rules.append({
+            "conditions": {
+                "options": {"caseSensitive": True, "leftValue": "", "typeValidation": "strict", "version": 2},
+                "conditions": [{"id": str(uuid.uuid5(NS, f"{w.id}/{name}/{value}")), "leftValue": "={{ $json.kind }}",
+                                "rightValue": value, "operator": {"type": "string", "operation": "equals"}}],
+                "combinator": "and"},
+            "renameOutput": True, "outputKey": label})
+    return w.node(name, "n8n-nodes-base.switch", 3.2,
+                  {"rules": {"values": rules},
+                   "options": {"fallbackOutput": "extra", "renameFallbackOutput": "Other / no file"}}, pos)
+
+
+def price_list() -> Workflow:
+    w = Workflow("p8PriceList00001", "P8 · Supplier price list (form upload -> validate -> apply)")
+    w.node("Price list upload form", "n8n-nodes-base.formTrigger", 2.3, {
+        "formTitle": "Supplier price list upload",
+        "formDescription": "Upload the supplier price list as CSV or XLSX. Needed columns: a price column and a SKU "
+                           "or product-name column. Every valid row is applied in one transaction; you get a summary "
+                           "email with a rejects file (one reason per row). Demo store with synthetic data.",
+        "formFields": {"values": [{"fieldLabel": "Price list file", "fieldType": "file", "multipleFiles": False,
+                                   "acceptFileTypes": ".csv, .xlsx", "requiredField": True}]},
+        "responseMode": "lastNode",
+        "options": {"path": "p8-price-list", "appendAttribution": False, "buttonLabel": "Upload and apply"},
+    }, (0, 200), webhookId=str(uuid.uuid5(NS, "form/p8-price-list")))
+    w.code("Detect file type", "price_detect_file", (240, 200))
+    switch_kind(w, "CSV or XLSX?", (480, 200), [("csv", "CSV"), ("xlsx", "XLSX")])
+    w.node("Read CSV", "n8n-nodes-base.extractFromFile", 1.1,
+           {"operation": "csv", "binaryPropertyName": "file", "options": {"headerRow": True}}, (720, 40),
+           alwaysOutputData=True)
+    w.node("Read XLSX", "n8n-nodes-base.extractFromFile", 1.1,
+           {"operation": "xlsx", "binaryPropertyName": "file", "options": {"headerRow": True}}, (720, 200),
+           alwaysOutputData=True)
+    w.code("Collect rows", "price_collect_rows", (960, 200))
+    w.sql("Validate + diff", "select p8_validate_price_list($1, $2::jsonb, $3::boolean, $4) as report;", (1200, 200),
+          params="={{ [ $json.fileName, $json.rows === null ? null : JSON.stringify($json.rows), $json.ai, "
+                 "$json.fileError ] }}")
+    w.if_true("Rows for AI?", "={{ $json.report.rows_pending_ai }}", 0, (1440, 200), op="gt", kind="number")
+    w.sql("Load catalog", "select sku, name from products order by sku;", (1680, 20))
+    w.code("Build AI prompt", "price_ai_prompt", (1920, 20))
+    w.node("Ask Gemini", "n8n-nodes-base.httpRequest", 4.2, {
+        "method": "POST", "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "sendBody": True, "specifyBody": "json", "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {"timeout": 60000,
+                    "response": {"response": {"fullResponse": True, "neverError": True, "responseFormat": "json"}}},
+    }, (2160, 20), creds="gemini", onError="continueRegularOutput")
+    w.code("Parse AI answer", "price_ai_parse", (2400, 20))
+    w.sql("Record AI matches (review only)",
+          "select p8_record_ai_matches($1, $2::jsonb, $3::numeric, $4) as report;", (2640, 20),
+          params="={{ [ $json.importId, JSON.stringify($json.matches), $json.threshold, $json.error ] }}")
+    w.sql("Apply valid rows (one transaction)", "select p8_apply_price_list($1) as report;", (2880, 200),
+          params="={{ [ $json.report.import_id ] }}")
+    w.code("Build summary", "price_summary", (3120, 200))
+    w.email("Send summary email", "={{ $json.subject }}", "={{ $json.html }}", (3360, 200),
+            attachments="={{ $json.attachments }}")
+    w.node("Show result to uploader", "n8n-nodes-base.form", 2.3, {
+        "operation": "completion", "respondWith": "text", "completionTitle": "Price list processed",
+        "completionMessage": "={{ (r => r.file_error ? 'File rejected: ' + r.file_error + '. Nothing was changed.' : "
+                             "r.rows_changed + ' price(s) updated, ' + r.rows_unchanged + ' unchanged, ' + "
+                             "r.rows_rejected + ' rejected, ' + r.rows_review + ' AI suggestion(s) to review. "
+                             "A summary email with the details was sent.')($('Build summary').first().json.report) }}",
+        "options": {}}, (3600, 200), webhookId=str(uuid.uuid5(NS, "form/p8-price-list/done")))
+    w.chain("Price list upload form", "Detect file type", "CSV or XLSX?")
+    w.connect("CSV or XLSX?", "Read CSV", 0)
+    w.connect("CSV or XLSX?", "Read XLSX", 1)
+    w.connect("CSV or XLSX?", "Collect rows", 2)
+    w.connect("Read CSV", "Collect rows")
+    w.connect("Read XLSX", "Collect rows")
+    w.chain("Collect rows", "Validate + diff", "Rows for AI?")
+    w.connect("Rows for AI?", "Load catalog", 0)
+    w.connect("Rows for AI?", "Apply valid rows (one transaction)", 1)
+    w.chain("Load catalog", "Build AI prompt", "Ask Gemini", "Parse AI answer", "Record AI matches (review only)",
+            "Apply valid rows (one transaction)")
+    w.chain("Apply valid rows (one transaction)", "Build summary", "Send summary email", "Show result to uploader")
+    return w
+
+
 def error_handler() -> Workflow:
     w = Workflow(ERROR_WORKFLOW_ID, "P8 · Error handler (failure email)", error_workflow=False)
     w.node("On workflow error", "n8n-nodes-base.errorTrigger", 1, {}, (0, 0))
@@ -199,7 +279,12 @@ def error_handler() -> Workflow:
     return w
 
 
-WORKFLOWS = {"orders_sync": orders_sync, "low_stock_alert": low_stock_alert, "error_handler": error_handler}
+WORKFLOWS = {
+    "orders_sync": orders_sync,
+    "low_stock_alert": low_stock_alert,
+    "supplier_price_list": price_list,
+    "error_handler": error_handler,
+}
 
 
 def render() -> dict[str, str]:

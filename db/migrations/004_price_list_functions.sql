@@ -68,7 +68,9 @@ $$;
 
 -- Validates an uploaded file (rows = JSON objects keyed by the file's headers). Writes import_log + import_rows.
 -- Returns the report; rows the rules could not match are 'pending_ai' when AI matching is on.
-create or replace function p8_validate_price_list(p_file text, p_rows jsonb, p_ai_enabled boolean default false)
+-- p_file_error: a problem found before parsing (e.g. unsupported file type) rejects the whole file.
+create or replace function p8_validate_price_list(p_file text, p_rows jsonb, p_ai_enabled boolean default false,
+                                                  p_file_error text default null)
 returns jsonb
 language plpgsql as $$
 declare
@@ -76,7 +78,9 @@ declare
     v_keys    text[];
     v_error   text;
 begin
-    if p_rows is null or jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) = 0 then
+    if p_file_error is not null then
+        v_error := p_file_error;
+    elsif p_rows is null or jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) = 0 then
         v_error := 'the file has no data rows';
     else
         select coalesce(array_agg(distinct p8_norm_key(k)) filter (where p8_norm_key(k) is not null), '{}')

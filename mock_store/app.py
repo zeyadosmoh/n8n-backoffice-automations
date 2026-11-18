@@ -5,6 +5,7 @@
   Both sort by (updated_at, id) ascending and paginate with an opaque `page_info` cursor in the Link header.
 - Leaky-bucket rate limit (429 + Retry-After) and configurable random 5xx faults.
 - /_admin/* (X-Admin-Token): fault settings, simulated orders/restocks, counters. Never rate limited.
+- /_fake_gemini/...: a word-overlap test double of Gemini generateContent for the AI-matching e2e tests.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from .fake_gemini import router as fake_gemini_router
 from .store import SHOP_TZ, Store, default_anchor
 
 API = "/admin/api/2025-10"
@@ -110,6 +112,7 @@ def create_app(
     app = FastAPI(title="P8 mock store (synthetic data)", docs_url="/docs", redoc_url=None)
     app.state.store = store
     app.state.faults = faults
+    app.include_router(fake_gemini_router)  # test double for the optional AI matching (no key needed)
 
     def api_guard(request: Request, x_shopify_access_token: str = Header("")) -> None:
         if not secrets.compare_digest(x_shopify_access_token, api_token):

@@ -38,6 +38,8 @@ def test_missing_required_columns(db):
     assert r["file_error"].startswith("missing required column: sku or name")
     r = validate(db, [])
     assert r["file_error"] == "the file has no data rows"
+    r = db.execute("select p8_validate_price_list('x.pdf', null, false, 'unsupported file type .pdf') r").fetchone()["r"]
+    assert (r["status"], r["file_error"]) == ("rejected", "unsupported file type .pdf")
     assert db.execute("select count(*) n from import_rows").fetchone()["n"] == 0
 
 
