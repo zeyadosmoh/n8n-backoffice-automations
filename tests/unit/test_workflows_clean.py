@@ -30,8 +30,9 @@ def load(name):
     return json.loads((ROOT / "workflows" / f"{name}.json").read_text())
 
 
-def test_four_workflows_exported():
-    assert {f.stem for f in FILES} == {"orders_sync", "low_stock_alert", "supplier_price_list", "error_handler"}
+def test_all_workflows_exported():
+    assert {f.stem for f in FILES} == {"orders_sync", "low_stock_alert", "supplier_price_list", "error_handler",
+                                    "shopify_token"}
 
 
 def test_exports_are_up_to_date_with_generator():
@@ -48,7 +49,8 @@ def test_committed_workflows_are_clean():
 @pytest.mark.parametrize("f", FILES, ids=lambda f: f.stem)
 def test_every_workflow_uses_the_error_workflow_and_credentials_by_reference(f):
     wf = json.loads(f.read_text())
-    if wf["id"] != "p8ErrorHandler01":
+    # the error handler itself, and the token sub-workflow (its failures surface in the calling workflow)
+    if wf["id"] not in {"p8ErrorHandler01", "p8ShopifyToken01"}:
         assert wf["settings"]["errorWorkflow"] == "p8ErrorHandler01"
     for n in wf["nodes"]:
         for ref in (n.get("credentials") or {}).values():

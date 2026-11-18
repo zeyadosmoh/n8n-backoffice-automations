@@ -54,6 +54,7 @@ jobs:
     env:
       POSTGRES_PORT: "5438"
       REQUIRE_DB: "1"
+      REQUIRE_NODE: "1"   # Code-node scripts run under the runner's preinstalled node
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

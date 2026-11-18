@@ -1,0 +1,262 @@
+{
+  "id": "p8ShopifyToken01",
+  "name": "P8 · Shopify token (sub-workflow)",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "b3d9a524-cd1d-5179-a538-b1d953ec73b4",
+      "name": "Called by a workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select token, token is not null as hit from (select p8_shopify_token_get($1) as token) t;",
+        "options": {
+          "queryReplacement": "={{ [ $env.SHOPIFY_SHOP ] }}"
+        }
+      },
+      "id": "3bd3b402-1b47-544f-9309-6acb3c8fb9c7",
+      "name": "Cached token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        100
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "p8PostgresCred01",
+          "name": "P8 Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a3c6f7b7-abc8-5cb4-b3fd-7e8a28e7507e",
+              "leftValue": "={{ $json.hit }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d823f4c3-1b12-5bf6-96e8-450c2a3d2113",
+      "name": "Still valid for 1 h?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Cache hit: hand the cached token back to the calling workflow.\nreturn [{ json: { token: $json.token, cached: true } }];\n"
+      },
+      "id": "04c62bc0-27a6-564c-9ca8-6c314145e80d",
+      "name": "Return cached token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $env.SHOPIFY_SHOP }}/admin/oauth/access_token",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"grant_type\": \"client_credentials\"}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "090f88c8-97c5-520b-b7dc-18b2a9457402",
+      "name": "Fetch new token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        220
+      ],
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "p8ShopifyApp0001",
+          "name": "P8 Shopify app"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Token endpoint answer -> {token, expiresIn}. Errors carry the HTTP status and Shopify's short error code only:\n// never the response body as a whole, the request, or anything that could contain the client secret or a token.\n// Shopify documents a form-encoded body; this request sends JSON (n8n's Custom Auth credential can only add JSON\n// body fields). Shopify accepts it today; if that ever stops, this fails loudly and the failure email fires.\nconst r = $json;\nconst code = Number(r.statusCode || 0);\nconst body = (r.body && typeof r.body === 'object') ? r.body : {};\nif (code === 200 && typeof body.access_token === 'string' && body.access_token !== '') {\n  const expiresIn = Number(body.expires_in);\n  if (!Number.isFinite(expiresIn) || expiresIn <= 0) {\n    throw new Error(`Shopify token endpoint returned no usable expires_in (got ${JSON.stringify(body.expires_in)})`);\n  }\n  return [{ json: { token: body.access_token, expiresIn } }];\n}\nconst reason = typeof body.error === 'string' ? body.error.replace(/[^A-Za-z0-9_ .:-]/g, '').slice(0, 80) : '';\nconst detail = code ? `HTTP ${code}${reason ? ` (${reason})` : ''}`\n  : `network error: ${String((r.error && (r.error.code || r.error.name)) || 'no response').slice(0, 40)}`;\nthrow new Error(`Shopify token request failed: ${detail}. Check SHOPIFY_SHOP, the app install and the ` +\n  '\"P8 Shopify app\" credential. If the endpoint rejects the JSON body, see README \"Real Shopify store\".');\n"
+      },
+      "id": "0a2b0d6a-20f9-5ef3-97b6-908275a20f77",
+      "name": "Check token response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select p8_shopify_token_put($1, $2, $3::int) as expires_at;",
+        "options": {
+          "queryReplacement": "={{ [ $env.SHOPIFY_SHOP, $json.token, $json.expiresIn ] }}"
+        }
+      },
+      "id": "eea344b2-bf05-5045-b278-a329cf21e1e3",
+      "name": "Store token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1200,
+        220
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "p8PostgresCred01",
+          "name": "P8 Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// New token stored in Postgres: hand it back to the calling workflow (with its expiry, never logged anywhere).\nconst t = $('Check token response').first().json;\nreturn [{ json: { token: t.token, cached: false, expiresAt: $json.expires_at } }];\n"
+      },
+      "id": "9fde7dd4-3f7c-5b60-b87d-8af5e6bc3153",
+      "name": "Return new token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Called by a workflow": {
+      "main": [
+        [
+          {
+            "node": "Cached token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cached token": {
+      "main": [
+        [
+          {
+            "node": "Still valid for 1 h?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Still valid for 1 h?": {
+      "main": [
+        [
+          {
+            "node": "Return cached token",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch new token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch new token": {
+      "main": [
+        [
+          {
+            "node": "Check token response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check token response": {
+      "main": [
+        [
+          {
+            "node": "Store token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store token": {
+      "main": [
+        [
+          {
+            "node": "Return new token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Cairo",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveExecutionProgress": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

@@ -12,7 +12,8 @@ from p8.config import load_env, pg_dsn
 from p8.db import migrate, seed_products
 
 TEST_DB = "p8_test"
-TABLES = "price_changes, import_rows, import_log, alert_log, order_items, orders, sync_state, products"
+TABLES = ("price_changes, import_rows, import_log, alert_log, order_items, orders, sync_state, products, "
+          "shopify_token")
 
 
 def _require(var: str) -> bool:

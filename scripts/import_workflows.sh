@@ -90,6 +90,11 @@ creds = [
               "user": "", "password": ""}},
     {"id": "p8GeminiCred0001", "name": "P8 Gemini API", "type": "httpHeaderAuth",
      "data": {"name": "x-goog-api-key", "value": e.get("GEMINI_API_KEY") or "not-configured"}},
+    # Shopify Dev Dashboard app (client credentials grant). The secret lives only in this n8n credential; n8n's
+    # Custom Auth adds these fields to the token request's JSON body.
+    {"id": "p8ShopifyApp0001", "name": "P8 Shopify app", "type": "httpCustomAuth",
+     "data": {"json": json.dumps({"body": dict(client_id=e.get("SHOPIFY_CLIENT_ID") or "not-configured",
+                                               client_secret=e.get("SHOPIFY_CLIENT_SECRET") or "not-configured")})}},
 ]
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w") as f:

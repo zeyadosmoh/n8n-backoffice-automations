@@ -25,8 +25,14 @@ CRED = {
     "webhook": {"httpHeaderAuth": {"id": "p8WebhookCred001", "name": "P8 run-now token"}},
     "smtp": {"smtp": {"id": "p8MailpitSmtp001", "name": "P8 SMTP (Mailpit)"}},
     "gemini": {"httpHeaderAuth": {"id": "p8GeminiCred0001", "name": "P8 Gemini API"}},
+    # Shopify Dev Dashboard app: Custom Auth adds client_id + client_secret to the token request body (JSON)
+    "shopify_app": {"httpCustomAuth": {"id": "p8ShopifyApp0001", "name": "P8 Shopify app"}},
 }
 ERROR_WORKFLOW_ID = "p8ErrorHandler01"
+SHOPIFY_TOKEN_WORKFLOW_ID = "p8ShopifyToken01"
+# Executions that touch a Shopify token must not be stored: the token would sit in n8n's execution history.
+SAVE_NOTHING = {"saveDataSuccessExecution": "none", "saveDataErrorExecution": "none", "saveManualExecutions": False,
+                "saveExecutionProgress": False}
 FOOTER = "P8 back-office automations · synthetic data"
 
 
@@ -35,12 +41,14 @@ def js(name: str) -> str:
 
 
 class Workflow:
-    def __init__(self, wf_id: str, name: str, tags: list[str] | None = None, error_workflow: bool = True):
+    def __init__(self, wf_id: str, name: str, tags: list[str] | None = None, error_workflow: bool = True,
+                 settings: dict | None = None):
         self.id, self.name, self.nodes, self.connections = wf_id, name, [], {}
         self.settings = {"executionOrder": "v1", "timezone": "Africa/Cairo", "saveManualExecutions": True,
                          "callerPolicy": "workflowsFromSameOwner"}
         if error_workflow:
             self.settings["errorWorkflow"] = ERROR_WORKFLOW_ID
+        self.settings.update(settings or {})
 
     def node(self, name, type_, version, params, pos, creds=None, **extra):
         n = {"parameters": params, "id": str(uuid.uuid5(NS, f"{self.id}/{name}")), "name": name,
@@ -270,6 +278,38 @@ def price_list() -> Workflow:
     return w
 
 
+def shopify_token() -> Workflow:
+    """Sub-workflow: a Shopify Admin API token, cached in Postgres, renewed when missing or < 1 h from expiry.
+
+    Saves no execution data at all (success or error). No error workflow of its own: a failure surfaces in the
+    calling workflow, whose failure email carries the HTTP status only.
+    """
+    w = Workflow(SHOPIFY_TOKEN_WORKFLOW_ID, "P8 · Shopify token (sub-workflow)", error_workflow=False,
+                 settings=SAVE_NOTHING)
+    w.node("Called by a workflow", "n8n-nodes-base.executeWorkflowTrigger", 1.1, {"inputSource": "passthrough"},
+           (0, 100))
+    w.sql("Cached token", "select token, token is not null as hit from (select p8_shopify_token_get($1) as token) t;",
+          (240, 100), params="={{ [ $env.SHOPIFY_SHOP ] }}")
+    w.if_true("Still valid for 1 h?", "={{ $json.hit }}", True, (480, 100), op="true", kind="boolean")
+    w.code("Return cached token", "shopify_token_cached", (720, 0))
+    w.node("Fetch new token", "n8n-nodes-base.httpRequest", 4.2, {
+        "method": "POST", "url": "=https://{{ $env.SHOPIFY_SHOP }}/admin/oauth/access_token",
+        "authentication": "genericCredentialType", "genericAuthType": "httpCustomAuth",
+        "sendBody": True, "specifyBody": "json", "jsonBody": '{"grant_type": "client_credentials"}',
+        "options": {"timeout": 30000,
+                    "response": {"response": {"fullResponse": True, "neverError": True, "responseFormat": "json"}}},
+    }, (720, 220), creds="shopify_app", onError="continueRegularOutput")
+    w.code("Check token response", "shopify_token_check", (960, 220))
+    w.sql("Store token", "select p8_shopify_token_put($1, $2, $3::int) as expires_at;", (1200, 220),
+          params="={{ [ $env.SHOPIFY_SHOP, $json.token, $json.expiresIn ] }}")
+    w.code("Return new token", "shopify_token_new", (1440, 220))
+    w.chain("Called by a workflow", "Cached token", "Still valid for 1 h?")
+    w.connect("Still valid for 1 h?", "Return cached token", 0)
+    w.connect("Still valid for 1 h?", "Fetch new token", 1)
+    w.chain("Fetch new token", "Check token response", "Store token", "Return new token")
+    return w
+
+
 def error_handler() -> Workflow:
     w = Workflow(ERROR_WORKFLOW_ID, "P8 · Error handler (failure email)", error_workflow=False)
     w.node("On workflow error", "n8n-nodes-base.errorTrigger", 1, {}, (0, 0))
@@ -284,6 +324,7 @@ WORKFLOWS = {
     "low_stock_alert": low_stock_alert,
     "supplier_price_list": price_list,
     "error_handler": error_handler,
+    "shopify_token": shopify_token,
 }
 
 

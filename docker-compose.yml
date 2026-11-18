@@ -79,6 +79,10 @@ services:
       LLM_MODEL: ${LLM_MODEL:-gemini-3.5-flash-lite}
       GEMINI_API_BASE: ${GEMINI_API_BASE:-}   # empty = Google's API; tests point it at the mock's fake endpoint
       STORE_API_BASE: http://mock-store:8000/admin/api/2025-10
+      # mock (default) or shopify. Non-secret Shopify settings only; the client secret is in an n8n credential.
+      STORE_SOURCE: ${STORE_SOURCE:-mock}
+      SHOPIFY_SHOP: ${SHOPIFY_SHOP:-}
+      SHOPIFY_API_VERSION: ${SHOPIFY_API_VERSION:-2026-10}
     ports:
       - "127.0.0.1:${N8N_PORT_HOST:-5680}:5678"
     volumes:
