@@ -154,4 +154,5 @@ def test_orders_export_rows_for_a_cairo_day(db, store):
     out = db.execute("select * from p8_orders_export(%s)", (day,)).fetchall()
     expected = [o for o in rows if datetime.fromisoformat(o["created_at"]).astimezone(SHOP_TZ).date() == day]
     assert len(out) == sum(len(o["line_items"]) for o in expected) > 0
-    assert all(r["line_total"] == r["unit_price"] * r["quantity"] for r in out)
+    assert all(abs(r["line_total"] - r["unit_price"] * r["quantity"]) < 1e-9 for r in out)
+    assert out[0]["created_at_cairo"].startswith(str(day))

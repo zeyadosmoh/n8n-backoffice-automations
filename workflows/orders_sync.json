@@ -1,0 +1,626 @@
+{
+  "id": "p8OrdersSync0001",
+  "name": "P8 · Orders sync (hourly) + daily Excel export",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "5 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "fb8b4e6f-246f-5b5f-8656-97b85295cfce",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "p8/orders-sync",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "8baa3a95-1963-527f-a8b6-79c068ae92ba",
+      "name": "Run now (webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "p8WebhookCred001",
+          "name": "P8 run-now token"
+        }
+      },
+      "webhookId": "560ee174-96d2-5f4b-81dd-f47a89052b4f"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select p8_sync_since('orders') as orders_since, p8_sync_since('inventory_levels') as inventory_since;",
+        "options": {}
+      },
+      "id": "27917ca0-58dc-5c8d-a9f9-c3bf5182c42d",
+      "name": "Load cursors",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        100
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "p8PostgresCred01",
+          "name": "P8 Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Start of a sync run: one state object that travels through the page loop.\n// Streams are synced one after the other: orders, then inventory levels.\nconst base = $env.STORE_API_BASE;\nconst c = $input.first().json;\nconst streams = [\n  { stream: 'orders', path: 'orders.json', since: c.orders_since, extra: { status: 'any' } },\n  { stream: 'inventory_levels', path: 'inventory_levels.json', since: c.inventory_since, extra: {} },\n].map((s) => {\n  // (URLSearchParams is not available in the Code-node sandbox)\n  const q = { limit: '250', ...s.extra };\n  if (s.since) q.updated_at_min = new Date(s.since).toISOString();\n  const qs = Object.entries(q).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');\n  return { stream: s.stream, since: s.since || null, firstUrl: `${base}/${s.path}?${qs}` };\n});\nreturn [{\n  json: {\n    streams, idx: 0, url: streams[0].firstUrl, nextUrl: null,\n    attempt: 0, retries: 0, rateLimited: 0, totals: {}, startedAt: new Date().toISOString(),\n  },\n}];\n"
+      },
+      "id": "16a7b587-a51f-59d1-8525-6fcce385b353",
+      "name": "Start streams",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        100
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "70caadac-b1f1-5ea9-9d12-9afdb574dfe0",
+      "name": "Next request",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        720,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "5e626d2f-59c6-549c-8fe6-0b447e245f78",
+      "name": "Fetch page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "p8StoreApiCred01",
+          "name": "P8 store API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decide what to do with one HTTP response: apply the page, or back off and retry.\n// 429 -> wait Retry-After. 5xx / network error -> exponential backoff (1, 2, 4, 8, 16 s + jitter).\n// After MAX_RETRIES failed attempts (5xx / network) or MAX_429 rate-limit answers in a row for the same page,\n// the run fails and the error workflow sends an email. 429s have their own budget: they are expected, not errors.\nconst MAX_RETRIES = 5;\nconst MAX_429 = 20;\nconst st = $('Next request').item.json;\nconst r = $json;\nconst stream = st.streams[st.idx].stream;\nconst code = Number(r.statusCode || 0);\n\nif (code === 200) {\n  const link = (r.headers && r.headers.link) || '';\n  const m = link.match(/<([^>]+)>;\\s*rel=\"next\"/);\n  return { json: { ...st, action: 'apply', stream, payload: r.body, nextUrl: m ? m[1] : null, throttled: 0 } };\n}\n\nconst detail = code ? `HTTP ${code}` : `network error: ${(r.error && (r.error.message || r.error)) || 'no response'}`;\nif (code && code !== 429 && code < 500) {\n  throw new Error(`Store API (${stream}) refused the request: ${detail} ${JSON.stringify(r.body || '').slice(0, 200)}`);\n}\nconst limited = code === 429;\nconst attempt = st.attempt + (limited ? 0 : 1);\nconst throttled = (st.throttled || 0) + (limited ? 1 : 0);\nif (throttled > MAX_429) {\n  throw new Error(`Store API (${stream}) rate limit did not clear after ${MAX_429} waits. ` +\n    'Nothing was written for this page and the cursor was not moved.');\n}\nif (attempt > MAX_RETRIES) {\n  throw new Error(`Store API (${stream}) still failing after ${MAX_RETRIES} retries: ${detail}. ` +\n    'Nothing was written for this page and the cursor was not moved.');\n}\nconst retryAfter = Number((r.headers && r.headers['retry-after']) || 0);\nconst wait = limited ? Math.min(60, retryAfter || 2) : Math.min(30, 2 ** (attempt - 1)) + Math.random() * 0.5;\nreturn {\n  json: {\n    ...st, action: 'retry', stream, attempt, throttled,\n    retries: st.retries + (limited ? 0 : 1), rateLimited: st.rateLimited + (limited ? 1 : 0),\n    waitSeconds: Math.round(wait * 10) / 10, lastError: detail,\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "5e85b462-8d35-583c-9863-8d11850d9f26",
+      "name": "Check response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "311a39bd-1b7f-5058-bd50-818a553ef45f",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e687a455-4e81-5e62-89d6-5994a55cd635",
+      "name": "Retry or apply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.waitSeconds }}",
+        "unit": "seconds"
+      },
+      "id": "7a8b7ce2-8b89-52d1-81e3-c0e3cc2e7551",
+      "name": "Back off",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        -60
+      ],
+      "webhookId": "b07782fe-feea-5c3e-bbd3-75f798cbcfe5"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select case $1 when 'orders' then p8_sync_orders_page($2::jsonb)\n            else p8_sync_inventory_page($2::jsonb) end as result;",
+        "options": {
+          "queryReplacement": "={{ [ $json.stream, JSON.stringify($json.payload) ] }}"
+        }
+      },
+      "id": "e9297da2-2ae0-5e10-bc20-0b89d8f758b7",
+      "name": "Apply page (one transaction)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1680,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "p8PostgresCred01",
+          "name": "P8 Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// After a page was committed (rows + cursor in one transaction): follow the Link header, move on to the next\n// stream, or finish.\nconst st = $('Retry or apply?').item.json;\nconst res = $json.result;\nconst totals = { ...st.totals };\nconst t = totals[st.stream] || { pages: 0, received: 0, changed: 0 };\ntotals[st.stream] = {\n  pages: t.pages + 1,\n  received: t.received + res.received,\n  changed: t.changed + res.changed,\n  cursor: res.cursor ? res.cursor.cursor_updated_at : null,\n};\nconst next = { ...st, totals, attempt: 0, throttled: 0 };\ndelete next.payload;\ndelete next.action;\nif (st.nextUrl) return { json: { ...next, url: st.nextUrl, nextUrl: null, done: false } };\nif (st.idx + 1 < st.streams.length) {\n  const idx = st.idx + 1;\n  return { json: { ...next, idx, url: st.streams[idx].firstUrl, nextUrl: null, done: false } };\n}\nreturn { json: { ...next, done: true } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "e60ee0e4-0273-589e-bba3-d3deab1b4791",
+      "name": "Next page?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3268587f-e867-5582-890e-40f856ea27c7",
+              "leftValue": "={{ $json.done }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ef166cc4-257a-52ce-8a53-4f8a62c8faff",
+      "name": "More to fetch?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2160,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Run summary (also the webhook response for \"run now\").\nconst st = $json;\nconst z = { pages: 0, received: 0, changed: 0, cursor: null };\nreturn [{\n  json: {\n    ok: true,\n    synthetic_data: true,\n    orders: st.totals.orders || z,\n    inventory_levels: st.totals.inventory_levels || z,\n    retries: st.retries,\n    rate_limited: st.rateLimited,\n    seconds: Math.round((Date.now() - new Date(st.startedAt).getTime()) / 100) / 10,\n  },\n}];\n"
+      },
+      "id": "6b2eaaaf-fd50-5d5e-869a-c106c1829267",
+      "name": "Sync summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "55 23 * * *"
+            }
+          ]
+        }
+      },
+      "id": "8a109ae1-2ecf-55f2-bee6-7f485445716f",
+      "name": "Daily 23:55",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "p8/orders-export",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "51bee501-8556-542a-bf4e-903272271ab4",
+      "name": "Export now (webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        800
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "p8WebhookCred001",
+          "name": "P8 run-now token"
+        }
+      },
+      "webhookId": "5ba4e122-1e5e-58ae-ae8a-d781984fbe76"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Which Africa/Cairo day to export: the webhook may pass {\"day\": \"YYYY-MM-DD\"}; the schedule uses today.\nconst body = ($json.body && typeof $json.body === 'object') ? $json.body : {};\nconst day = body.day || $now.setZone('Africa/Cairo').toISODate();\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(day)) throw new Error(`Invalid day \"${day}\", expected YYYY-MM-DD`);\nreturn [{ json: { day, file: `/files/exports/orders_${day}.xlsx` } }];\n"
+      },
+      "id": "37577681-6b39-500c-8815-b65fba08598c",
+      "name": "Export day",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select * from p8_orders_export($1::date);",
+        "options": {
+          "queryReplacement": "={{ [ $json.day ] }}"
+        }
+      },
+      "id": "84a73de0-e537-50ff-9653-f1494662321c",
+      "name": "Load order lines",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        480,
+        700
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "p8PostgresCred01",
+          "name": "P8 Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "options": {
+          "fileName": "=orders_{{ $('Export day').first().json.day }}.xlsx",
+          "sheetName": "Orders (synthetic data)",
+          "headerRow": true
+        }
+      },
+      "id": "feca69aa-18e7-5a40-9e82-5263fc0fdf54",
+      "name": "To Excel",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $('Export day').first().json.file }}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "e7e7292e-c70e-5c51-a8b7-cb9b6d9f2d27",
+      "name": "Save to exports/",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        960,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Export day').first().json;\nconst rows = $('Load order lines').all().filter((i) => i.json.order_id !== undefined).length;\nreturn [{ json: { ok: true, synthetic_data: true, day: d.day, file: d.file.replace('/files/', ''), rows } }];\n"
+      },
+      "id": "bbdaf561-21da-51b9-81d8-21c6a27db3f4",
+      "name": "Export summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        700
+      ]
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "Load cursors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now (webhook)": {
+      "main": [
+        [
+          {
+            "node": "Load cursors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load cursors": {
+      "main": [
+        [
+          {
+            "node": "Start streams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start streams": {
+      "main": [
+        [
+          {
+            "node": "Next request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Next request": {
+      "main": [
+        [
+          {
+            "node": "Fetch page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch page": {
+      "main": [
+        [
+          {
+            "node": "Check response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check response": {
+      "main": [
+        [
+          {
+            "node": "Retry or apply?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry or apply?": {
+      "main": [
+        [
+          {
+            "node": "Back off",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply page (one transaction)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Back off": {
+      "main": [
+        [
+          {
+            "node": "Next request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply page (one transaction)": {
+      "main": [
+        [
+          {
+            "node": "Next page?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Next page?": {
+      "main": [
+        [
+          {
+            "node": "More to fetch?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "More to fetch?": {
+      "main": [
+        [
+          {
+            "node": "Next request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sync summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 23:55": {
+      "main": [
+        [
+          {
+            "node": "Export day",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export now (webhook)": {
+      "main": [
+        [
+          {
+            "node": "Export day",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export day": {
+      "main": [
+        [
+          {
+            "node": "Load order lines",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load order lines": {
+      "main": [
+        [
+          {
+            "node": "To Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "To Excel": {
+      "main": [
+        [
+          {
+            "node": "Save to exports/",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to exports/": {
+      "main": [
+        [
+          {
+            "node": "Export summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Cairo",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "p8ErrorHandler01"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "id": "p8ErrorHandler01",
+  "name": "P8 · Error handler (failure email)",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "da74f19b-9ac9-5045-8fbe-216271385ec7",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Error Trigger payload -> alert email fields. The execution link uses N8N_EDITOR_BASE_URL (default\n// http://localhost:5680), never a hard-coded host.\nconst esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\nconst e = $json;\nconst exec = e.execution || {};\nconst wf = e.workflow || {};\nconst err = exec.error || (e.trigger && e.trigger.error) || {};\nconst node = exec.lastNodeExecuted || (err.node && err.node.name) || (e.trigger ? 'trigger' : 'unknown');\nconst message = err.message || 'unknown error';\nconst base = String($env.N8N_EDITOR_BASE_URL || 'http://localhost:5680').replace(/\\/+$/, '');\nconst link = exec.id ? `${base}/workflow/${wf.id}/executions/${exec.id}` : null;\nconst when = $now.setZone('Africa/Cairo').toFormat('yyyy-LL-dd HH:mm');\nconst html = `\n<div style=\"font-family:Arial,sans-serif;font-size:14px;color:#1f2328\">\n  <h2 style=\"color:#b42318;margin:0 0 12px\">n8n workflow failed</h2>\n  <table cellpadding=\"6\" style=\"border-collapse:collapse\">\n    <tr><td><b>Workflow</b></td><td>${esc(wf.name)} (${esc(wf.id)})</td></tr>\n    <tr><td><b>Node</b></td><td>${esc(node)}</td></tr>\n    <tr><td><b>Error</b></td><td>${esc(message)}</td></tr>\n    <tr><td><b>Mode</b></td><td>${esc(exec.mode || 'trigger')}</td></tr>\n    <tr><td><b>When</b></td><td>${esc(when)} (Africa/Cairo)</td></tr>\n    <tr><td><b>Execution</b></td><td>${link ? `<a href=\"${esc(link)}\">${esc(link)}</a>` : 'n/a (failed before an execution was stored)'}</td></tr>\n  </table>\n  <p style=\"color:#57606a;font-size:12px\">P8 back-office automations · synthetic data</p>\n</div>`;\nconst text = `n8n workflow failed\\nWorkflow: ${wf.name} (${wf.id})\\nNode: ${node}\\nError: ${message}\\nExecution: ${link || 'n/a'}\\n(synthetic data)`;\nreturn [{ json: { subject: `[P8 alert] ${wf.name || 'workflow'} failed at \"${node}\"`, html, text, workflow: wf.name, node, message, link } }];\n"
+      },
+      "id": "b7d0bbd7-18a3-52d3-8485-5e1974336a4c",
+      "name": "Format alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.ALERT_EMAIL_FROM }}",
+        "toEmail": "={{ $env.ALERT_EMAIL_TO }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "both",
+        "html": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        },
+        "text": "={{ $json.text }}"
+      },
+      "id": "da6a0cfe-3c03-566e-9ad5-b5e6a555bcf7",
+      "name": "Send failure email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        480,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "p8MailpitSmtp001",
+          "name": "P8 SMTP (Mailpit)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Format alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format alert": {
+      "main": [
+        [
+          {
+            "node": "Send failure email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Cairo",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

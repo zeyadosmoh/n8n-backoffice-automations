@@ -61,7 +61,7 @@ services:
       N8N_HOST: localhost
       N8N_PORT: "5678"
       N8N_PROTOCOL: http
-      WEBHOOK_URL: http://localhost:${N8N_PORT_HOST:-5680}/
+      N8N_WEBHOOK_URL: http://localhost:${N8N_PORT_HOST:-5680}/
       N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-http://localhost:5680}
       GENERIC_TIMEZONE: Africa/Cairo
       TZ: Africa/Cairo

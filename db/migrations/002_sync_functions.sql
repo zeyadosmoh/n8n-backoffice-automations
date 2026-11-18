@@ -137,14 +137,16 @@ begin
 end
 $$;
 
--- Rows for the daily Excel export: every order line created on p_day (Africa/Cairo).
+-- Rows for the daily Excel export: every order line created on p_day (Africa/Cairo). Times are Cairo local time as
+-- text and amounts are float8 so the spreadsheet shows them as written (node-postgres turns numeric into strings).
 create or replace function p8_orders_export(p_day date)
-returns table (order_name text, order_id bigint, created_at_cairo timestamp, financial_status text,
+returns table (order_name text, order_id text, created_at_cairo text, financial_status text,
                fulfillment_status text, cancelled boolean, sku text, title text, quantity integer,
-               unit_price numeric, line_total numeric, currency text)
+               unit_price float8, line_total float8, currency text)
 language sql stable as $$
-    select o.name, o.id, o.created_at at time zone 'Africa/Cairo', o.financial_status, o.fulfillment_status,
-           o.cancelled_at is not null, oi.sku, oi.title, oi.quantity, oi.price, oi.quantity * oi.price, o.currency
+    select o.name, o.id::text, to_char(o.created_at at time zone 'Africa/Cairo', 'YYYY-MM-DD HH24:MI:SS'),
+           o.financial_status, o.fulfillment_status, o.cancelled_at is not null, oi.sku, oi.title, oi.quantity,
+           oi.price::float8, (oi.quantity * oi.price)::float8, o.currency
     from orders o join order_items oi on oi.order_id = o.id
     where (o.created_at at time zone 'Africa/Cairo')::date = p_day
     order by o.created_at, o.id, oi.id
