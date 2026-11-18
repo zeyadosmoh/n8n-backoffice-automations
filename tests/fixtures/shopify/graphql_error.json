@@ -1,0 +1,25 @@
+{
+ "_note": "Synthetic data in the GraphQL Admin API 2026-10 response shape.",
+ "errors": [
+  {
+   "message": "Field 'colour' doesn't exist on type 'Order'",
+   "locations": [
+    {
+     "line": 4,
+     "column": 7
+    }
+   ],
+   "path": [
+    "query P8Orders",
+    "orders",
+    "nodes",
+    "colour"
+   ],
+   "extensions": {
+    "code": "undefinedField",
+    "typeName": "Order",
+    "fieldName": "colour"
+   }
+  }
+ ]
+}

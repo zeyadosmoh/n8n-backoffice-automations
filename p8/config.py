@@ -31,3 +31,22 @@ def pg_dsn(env: dict[str, str] | None = None, dbname: str | None = None) -> str:
         f"user={env['POSTGRES_USER']} password={env['POSTGRES_PASSWORD']} "
         f"dbname={dbname or env.get('POSTGRES_DB', 'p8')}"
     )
+
+
+def db_name(env: dict[str, str], source: str = "mock") -> str:
+    """The database a store source uses: POSTGRES_DB for the mock, SHOPIFY_POSTGRES_DB for the real store."""
+    if source == "shopify":
+        return env.get("SHOPIFY_POSTGRES_DB") or "p8_shopify"
+    return env.get("POSTGRES_DB", "p8")
+
+
+def ensure_database(env: dict[str, str], dbname: str) -> bool:
+    """Create dbname on the same server if it does not exist yet. True if it was created."""
+    import psycopg
+    from psycopg import sql
+
+    with psycopg.connect(pg_dsn(env), autocommit=True) as conn:
+        if conn.execute("select 1 from pg_database where datname = %s", (dbname,)).fetchone():
+            return False
+        conn.execute(sql.SQL("create database {}").format(sql.Identifier(dbname)))
+        return True

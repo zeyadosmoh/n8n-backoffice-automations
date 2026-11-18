@@ -70,6 +70,39 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5d31b5ee-84e4-59e2-a6b5-b4f87db4fe17",
+              "leftValue": "={{ $env.STORE_SOURCE }}",
+              "rightValue": "shopify",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "630ace7e-9c9b-5d77-98ab-3df54af2b265",
+      "name": "Shopify store?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        100
+      ]
+    },
+    {
+      "parameters": {
         "jsCode": "// Start of a sync run: one state object that travels through the page loop.\n// Streams are synced one after the other: orders, then inventory levels.\nconst base = $env.STORE_API_BASE;\nconst c = $input.first().json;\nconst streams = [\n  { stream: 'orders', path: 'orders.json', since: c.orders_since, extra: { status: 'any' } },\n  { stream: 'inventory_levels', path: 'inventory_levels.json', since: c.inventory_since, extra: {} },\n].map((s) => {\n  // (URLSearchParams is not available in the Code-node sandbox)\n  const q = { limit: '250', ...s.extra };\n  if (s.since) q.updated_at_min = new Date(s.since).toISOString();\n  const qs = Object.entries(q).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');\n  return { stream: s.stream, since: s.since || null, firstUrl: `${base}/${s.path}?${qs}` };\n});\nreturn [{\n  json: {\n    streams, idx: 0, url: streams[0].firstUrl, nextUrl: null,\n    attempt: 0, retries: 0, rateLimited: 0, totals: {}, startedAt: new Date().toISOString(),\n  },\n}];\n"
       },
       "id": "16a7b587-a51f-59d1-8525-6fcce385b353",
@@ -77,7 +110,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        480,
+        720,
         100
       ]
     },
@@ -88,7 +121,7 @@
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
       "position": [
-        720,
+        960,
         100
       ]
     },
@@ -113,7 +146,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        960,
+        1200,
         100
       ],
       "credentials": {
@@ -134,7 +167,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1200,
+        1440,
         100
       ]
     },
@@ -167,7 +200,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1440,
+        1680,
         100
       ]
     },
@@ -181,7 +214,7 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        1680,
+        1920,
         -60
       ],
       "webhookId": "b07782fe-feea-5c3e-bbd3-75f798cbcfe5"
@@ -199,7 +232,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        1680,
+        1920,
         200
       ],
       "credentials": {
@@ -219,7 +252,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1920,
+        2160,
         200
       ]
     },
@@ -252,21 +285,384 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2160,
+        2400,
         200
       ]
     },
     {
       "parameters": {
-        "jsCode": "// Run summary (also the webhook response for \"run now\").\nconst st = $json;\nconst z = { pages: 0, received: 0, changed: 0, cursor: null };\nreturn [{\n  json: {\n    ok: true,\n    synthetic_data: true,\n    orders: st.totals.orders || z,\n    inventory_levels: st.totals.inventory_levels || z,\n    retries: st.retries,\n    rate_limited: st.rateLimited,\n    seconds: Math.round((Date.now() - new Date(st.startedAt).getTime()) / 100) / 10,\n  },\n}];\n"
+        "jsCode": "// Run summary (also the webhook response for \"run now\").\nconst st = $json;\nconst z = { pages: 0, received: 0, changed: 0, cursor: null };\nreturn [{\n  json: {\n    ok: true,\n    synthetic_data: true,\n    source: st.source || 'mock',\n    orders: st.totals.orders || z,\n    inventory_levels: st.totals.inventory_levels || z,\n    retries: st.retries,\n    rate_limited: st.rateLimited,\n    seconds: Math.round((Date.now() - new Date(st.startedAt).getTime()) / 100) / 10,\n  },\n}];\n"
       },
       "id": "6b2eaaaf-fd50-5d5e-869a-c106c1829267",
       "name": "Sync summary",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2400,
+        2640,
         300
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "p8ShopifyToken01",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "18875b2d-913d-5d2c-8059-6904cd7c5301",
+      "name": "Get Shopify token",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        720,
+        -480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Start of a Shopify sync run (STORE_SOURCE=shopify): one state object that travels through the GraphQL page loop.\n// Orders first (sortKey UPDATED_AT, committed page by page), then inventory levels at the primary location\n// (no sort key in the API, so all pages are collected and applied in one transaction at the end).\n// The token is NOT copied into this state; the GraphQL node reads it from \"Get Shopify token\".\nconst c = $('Load cursors').first().json;\nconst since = (ts) => (ts ? `updated_at:>='${new Date(ts).toISOString()}'` : null);\nconst ORDERS = `query P8Orders($first: Int!, $after: String, $q: String) {\n  orders(first: $first, after: $after, sortKey: UPDATED_AT, query: $q) {\n    pageInfo { hasNextPage endCursor }\n    nodes {\n      id name createdAt processedAt updatedAt cancelledAt displayFinancialStatus displayFulfillmentStatus\n      totalPriceSet { shopMoney { amount currencyCode } }\n      lineItems(first: 50) {\n        pageInfo { hasNextPage }\n        nodes { id sku name quantity originalUnitPriceSet { shopMoney { amount } } }\n      }\n    }\n  }\n}`;\nconst INVENTORY = `query P8Inventory($first: Int!, $after: String, $q: String) {\n  location {\n    id\n    inventoryLevels(first: $first, after: $after, query: $q) {\n      pageInfo { hasNextPage endCursor }\n      nodes { updatedAt quantities(names: [\"available\"]) { name quantity } item { id sku } }\n    }\n  }\n}`;\nconst streams = [\n  { stream: 'orders', query: ORDERS, first: 50, q: since(c.orders_since), since: c.orders_since || null },\n  { stream: 'inventory_levels', query: INVENTORY, first: 250, q: since(c.inventory_since),\n    since: c.inventory_since || null },\n];\nreturn [{\n  json: {\n    source: 'shopify', streams, idx: 0, after: null, buffer: [],\n    attempt: 0, throttled: 0, retries: 0, rateLimited: 0, totals: {}, startedAt: new Date().toISOString(),\n  },\n}];\n"
+      },
+      "id": "fbf63d62-4348-532f-b6f0-4d7fdbdb2879",
+      "name": "Start Shopify streams",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        -480
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "13b4e986-594f-567c-92cf-c2a06ba3bc47",
+      "name": "Next GraphQL request",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        -480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $env.SHOPIFY_SHOP }}/admin/api/{{ $env.SHOPIFY_API_VERSION }}/graphql.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Shopify-Access-Token",
+              "value": "={{ $('Get Shopify token').first().json.token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $json.streams[$json.idx].query, variables: { first: $json.streams[$json.idx].first, after: $json.after, q: $json.streams[$json.idx].q } }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "885df946-d720-59e4-879f-644af1555b63",
+      "name": "Fetch GraphQL page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        -480
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// One GraphQL Admin API answer -> what to do next, and the page mapped into the same staging shape as the mock\n// store's REST pages (so p8_sync_orders_page / p8_sync_inventory_page, the cursor and idempotency stay unchanged).\n//   apply  : rows ready to commit (an orders page, or all inventory pages collected)\n//   next   : inventory page collected, fetch the next one\n//   retry  : THROTTLED / 429 -> wait until the bucket has the points; 5xx / network -> backoff 1, 2, 4, 8, 16 s\n//   reauth : 401, the cached token was rejected -> forget it and fail (the next run fetches a new one)\n// Every success also reads extensions.cost.throttleStatus and asks for a pause when points run low.\nconst MAX_RETRIES = 5;\nconst MAX_THROTTLED = 20;\nconst st = $('Next GraphQL request').item.json;\nconst s = st.streams[st.idx];\nconst r = $json;\nconst code = Number(r.statusCode || 0);\nconst body = (r.body && typeof r.body === 'object') ? r.body : {};\nconst errors = Array.isArray(body.errors) ? body.errors : [];\nconst cost = (body.extensions && body.extensions.cost) || null;\n\n// Seconds until the bucket holds `need` points again (+0.5 s margin), 0 if it already does.\nconst waitForPoints = (need) => {\n  const ts = cost && cost.throttleStatus;\n  if (!ts || !ts.restoreRate) return 0;\n  const missing = need - ts.currentlyAvailable;\n  return missing > 0 ? Math.round((missing / ts.restoreRate + 0.5) * 10) / 10 : 0;\n};\nconst numId = (gid) => Number(String(gid).split('?')[0].split('/').pop());\nconst lower = (v) => (v == null ? null : String(v).toLowerCase());\nconst FULFILLMENT = { FULFILLED: 'fulfilled', UNFULFILLED: null, PARTIALLY_FULFILLED: 'partial' };\n\nconst mapOrder = (o) => {\n  if (o.lineItems.pageInfo.hasNextPage) {\n    throw new Error(`Shopify order ${o.name} has more than 50 line items; raise lineItems(first:) in ` +\n      '\"Start Shopify streams\". Nothing was written for this page and the cursor was not moved.');\n  }\n  return {\n    id: numId(o.id),\n    name: o.name,\n    created_at: o.processedAt || o.createdAt,   // the order date (backdated imports keep theirs)\n    updated_at: o.updatedAt,\n    cancelled_at: o.cancelledAt,\n    financial_status: lower(o.displayFinancialStatus),\n    fulfillment_status: o.displayFulfillmentStatus in FULFILLMENT ? FULFILLMENT[o.displayFulfillmentStatus]\n      : lower(o.displayFulfillmentStatus),\n    currency: o.totalPriceSet.shopMoney.currencyCode,\n    total_price: o.totalPriceSet.shopMoney.amount,\n    line_items: o.lineItems.nodes.map((li) => ({\n      id: numId(li.id),\n      sku: li.sku || '',\n      title: li.name,\n      quantity: li.quantity,\n      price: li.originalUnitPriceSet.shopMoney.amount,\n    })),\n  };\n};\nconst mapLevel = (l) => {\n  const q = (l.quantities || []).find((x) => x.name === 'available');\n  return { inventory_item_id: numId(l.item.id), sku: l.item.sku || '', available: q ? q.quantity : 0,\n           updated_at: l.updatedAt };\n};\n\nif (code === 200 && body.data && errors.length === 0) {\n  const pause = waitForPoints(cost ? cost.requestedQueryCost : 0);\n  const base = { ...st, stream: s.stream, attempt: 0, throttled: 0, pauseSeconds: pause };\n  if (s.stream === 'orders') {\n    const conn = body.data.orders;\n    return { json: { ...base, action: 'apply', payload: { orders: conn.nodes.map(mapOrder) },\n                     nextAfter: conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null } };\n  }\n  if (!body.data.location) throw new Error('Shopify store has no primary location (read_locations scope?)');\n  const conn = body.data.location.inventoryLevels;\n  const buffer = st.buffer.concat(conn.nodes.map(mapLevel));\n  if (conn.pageInfo.hasNextPage) {\n    return { json: { ...base, action: 'next', buffer, nextAfter: conn.pageInfo.endCursor } };\n  }\n  return { json: { ...base, action: 'apply', buffer: [], payload: { inventory_levels: buffer }, nextAfter: null } };\n}\n\nif (code === 401) {\n  return { json: { ...st, stream: s.stream, action: 'reauth' } };\n}\nconst throttledError = errors.some((e) => e.extensions && e.extensions.code === 'THROTTLED');\nif (code === 429 || (code === 200 && throttledError)) {\n  const throttled = st.throttled + 1;\n  if (throttled > MAX_THROTTLED) {\n    throw new Error(`Shopify (${s.stream}) still THROTTLED after ${MAX_THROTTLED} waits. ` +\n      'Nothing was written for this page and the cursor was not moved.');\n  }\n  const retryAfter = Number((r.headers && r.headers['retry-after']) || 0);\n  const need = cost ? cost.requestedQueryCost : 0;\n  const wait = Math.min(60, Math.max(1, retryAfter, waitForPoints(need)));\n  return { json: { ...st, stream: s.stream, action: 'retry', throttled, rateLimited: st.rateLimited + 1,\n                   waitSeconds: wait, lastError: 'THROTTLED' } };\n}\nif (!code || code >= 500) {\n  const attempt = st.attempt + 1;\n  const detail = code ? `HTTP ${code}` : `network error: ${(r.error && (r.error.code || r.error.message)) || 'no response'}`;\n  if (attempt > MAX_RETRIES) {\n    throw new Error(`Shopify (${s.stream}) still failing after ${MAX_RETRIES} retries: ${detail}. ` +\n      'Nothing was written for this page and the cursor was not moved.');\n  }\n  const wait = Math.min(30, 2 ** (attempt - 1)) + Math.random() * 0.5;\n  return { json: { ...st, stream: s.stream, action: 'retry', attempt, retries: st.retries + 1,\n                   waitSeconds: Math.round(wait * 10) / 10, lastError: detail } };\n}\n// Anything else is not transient: GraphQL errors (bad query, missing scope), 4xx.\nconst msg = errors.length ? errors.map((e) => e.message).join('; ')\n  : (typeof body.errors === 'string' ? body.errors : JSON.stringify(body).slice(0, 200));\nthrow new Error(`Shopify (${s.stream}) refused the request: HTTP ${code}: ${String(msg).slice(0, 300)}`);\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "cc286319-510a-57dc-8d37-108ca55ff097",
+      "name": "Check GraphQL response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        -480
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "ed2e17ea-115a-585e-85fa-39e668d6190f",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "apply",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "apply"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "91d4aa78-5036-56f7-b5fc-c314927c0ad9",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "next",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "next"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "beb6a91e-2d02-5e37-8d53-3aab6d710f30",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "retry",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "retry"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "238a00ca-b9db-546f-9974-b029915bc957",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "reauth",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "reauth"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3710fad7-088e-5b39-a095-41cc1485a330",
+      "name": "Route Shopify page",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1920,
+        -480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select case $1 when 'orders' then p8_sync_orders_page($2::jsonb)\n            else p8_sync_inventory_page($2::jsonb) end as result;",
+        "options": {
+          "queryReplacement": "={{ [ $json.stream, JSON.stringify($json.payload) ] }}"
+        }
+      },
+      "id": "0ef7fabe-c7c2-55fe-a4d3-6623d53dd396",
+      "name": "Apply Shopify page (one transaction)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2160,
+        -640
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "p8PostgresCred01",
+          "name": "P8 Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// After a page was committed (orders page, or all inventory pages in one transaction) or collected (inventory):\n// follow endCursor, move on to the next stream, or finish. Passes on any pause the throttle status asked for.\nconst st = $('Route Shopify page').item.json;\nconst totals = { ...st.totals };\nconst t = totals[st.stream] || { pages: 0, received: 0, changed: 0, cursor: null };\nif (st.action === 'apply') {\n  const res = $json.result;\n  totals[st.stream] = {\n    pages: t.pages + 1, received: t.received + res.received, changed: t.changed + res.changed,\n    cursor: res.cursor ? res.cursor.cursor_updated_at : t.cursor,\n  };\n} else {\n  totals[st.stream] = { ...t, pages: t.pages + 1 };\n}\nconst next = { ...st, totals, attempt: 0, throttled: 0, waitSeconds: st.pauseSeconds || 0 };\nfor (const k of ['payload', 'action', 'nextAfter', 'pauseSeconds', 'lastError']) delete next[k];\nif (st.nextAfter) return { json: { ...next, after: st.nextAfter, done: false } };\nif (st.idx + 1 < st.streams.length) {\n  return { json: { ...next, idx: st.idx + 1, after: null, buffer: [], done: false } };\n}\nreturn { json: { ...next, done: true } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "9365affb-1a05-51da-a768-de455c0eee90",
+      "name": "Next Shopify page?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        -560
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "746bdf4f-2939-570d-af2a-8ee8bf8d0a05",
+              "leftValue": "={{ $json.done }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1dee93db-17d3-513e-9fab-b3198bcb49fc",
+      "name": "More Shopify pages?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        -560
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d680741b-4ef0-57e6-8b0e-a3aac9609074",
+              "leftValue": "={{ $json.waitSeconds }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "22608603-345c-5c18-9025-2b30d97f8a03",
+      "name": "Pause for points?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2880,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.waitSeconds }}",
+        "unit": "seconds"
+      },
+      "id": "2d7b8c39-85ee-5647-b7b0-17699bb2d993",
+      "name": "Wait (Shopify)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2160,
+        -400
+      ],
+      "webhookId": "6a7c2aaa-169a-548b-a5d2-9da3a66049b4"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "delete from shopify_token where shop = $1;",
+        "options": {
+          "queryReplacement": "={{ [ $env.SHOPIFY_SHOP ] }}"
+        }
+      },
+      "id": "79738152-5ace-5395-9e64-72c1accca85d",
+      "name": "Forget cached token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2160,
+        -240
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "p8PostgresCred01",
+          "name": "P8 Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shopify answered 401 to a cached token (revoked, app reinstalled, ...). The cache row was just deleted, so the\n// next run fetches a fresh token. Fail this run so the error workflow sends an email.\nthrow new Error('Shopify rejected the cached access token (HTTP 401). The cached token was deleted; the next run ' +\n  'fetches a new one. If this repeats, check the app installation and its scopes. Nothing was written for this ' +\n  'page and the cursor was not moved.');\n"
+      },
+      "id": "af36833d-cb0f-5022-bf68-dee6efde8923",
+      "name": "Token rejected",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        -240
       ]
     },
     {
@@ -425,6 +821,24 @@
       "main": [
         [
           {
+            "node": "Shopify store?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shopify store?": {
+      "main": [
+        [
+          {
+            "node": "Get Shopify token",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Start streams",
             "type": "main",
             "index": 0
@@ -539,6 +953,173 @@
         [
           {
             "node": "Sync summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Shopify token": {
+      "main": [
+        [
+          {
+            "node": "Start Shopify streams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Shopify streams": {
+      "main": [
+        [
+          {
+            "node": "Next GraphQL request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Next GraphQL request": {
+      "main": [
+        [
+          {
+            "node": "Fetch GraphQL page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch GraphQL page": {
+      "main": [
+        [
+          {
+            "node": "Check GraphQL response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check GraphQL response": {
+      "main": [
+        [
+          {
+            "node": "Route Shopify page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Shopify page": {
+      "main": [
+        [
+          {
+            "node": "Apply Shopify page (one transaction)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Next Shopify page?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait (Shopify)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Forget cached token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Shopify page (one transaction)": {
+      "main": [
+        [
+          {
+            "node": "Next Shopify page?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Next Shopify page?": {
+      "main": [
+        [
+          {
+            "node": "More Shopify pages?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "More Shopify pages?": {
+      "main": [
+        [
+          {
+            "node": "Pause for points?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sync summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pause for points?": {
+      "main": [
+        [
+          {
+            "node": "Wait (Shopify)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Next GraphQL request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait (Shopify)": {
+      "main": [
+        [
+          {
+            "node": "Next GraphQL request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Forget cached token": {
+      "main": [
+        [
+          {
+            "node": "Token rejected",
             "type": "main",
             "index": 0
           }

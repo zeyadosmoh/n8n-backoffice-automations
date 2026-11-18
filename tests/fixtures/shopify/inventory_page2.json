@@ -1,0 +1,53 @@
+{
+ "_note": "Synthetic data in the GraphQL Admin API 2026-10 response shape.",
+ "data": {
+  "location": {
+   "id": "gid://shopify/Location/97000000001",
+   "inventoryLevels": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": "aW52LXBhZ2UtMw=="
+    },
+    "nodes": [
+     {
+      "updatedAt": "2026-11-19T08:00:01Z",
+      "quantities": [
+       {
+        "name": "available",
+        "quantity": 55
+       }
+      ],
+      "item": {
+       "id": "gid://shopify/InventoryItem/48000000000010",
+       "sku": "SKU-1010"
+      }
+     },
+     {
+      "updatedAt": "2026-11-19T07:00:00Z",
+      "quantities": [
+       {
+        "name": "available",
+        "quantity": 3
+       }
+      ],
+      "item": {
+       "id": "gid://shopify/InventoryItem/48999999999999",
+       "sku": "UNKNOWN-SKU"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "extensions": {
+  "cost": {
+   "requestedQueryCost": 36,
+   "actualQueryCost": 26,
+   "throttleStatus": {
+    "maximumAvailable": 2000.0,
+    "currentlyAvailable": 1928,
+    "restoreRate": 100.0
+   }
+  }
+ }
+}

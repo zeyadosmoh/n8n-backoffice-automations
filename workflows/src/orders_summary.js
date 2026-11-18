@@ -5,6 +5,7 @@ return [{
   json: {
     ok: true,
     synthetic_data: true,
+    source: st.source || 'mock',
     orders: st.totals.orders || z,
     inventory_levels: st.totals.inventory_levels || z,
     retries: st.retries,

@@ -1,0 +1,69 @@
+{
+ "_note": "Synthetic data in the GraphQL Admin API 2026-10 response shape.",
+ "data": {
+  "orders": {
+   "pageInfo": {
+    "hasNextPage": false,
+    "endCursor": "eyJsYXN0X2lkIjo2MDAwMDAwMDAwMDAzfQ=="
+   },
+   "nodes": [
+    {
+     "id": "gid://shopify/Order/6000000000003",
+     "name": "#1003",
+     "createdAt": "2026-11-19T08:00:25Z",
+     "processedAt": "2026-11-10T11:05:00Z",
+     "updatedAt": "2026-11-19T08:02:00Z",
+     "cancelledAt": "2026-11-19T08:02:00Z",
+     "displayFinancialStatus": "REFUNDED",
+     "displayFulfillmentStatus": "PARTIALLY_FULFILLED",
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "204.99",
+       "currencyCode": "EGP"
+      }
+     },
+     "lineItems": {
+      "pageInfo": {
+       "hasNextPage": false
+      },
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/15000000000004",
+        "sku": "SKU-1001",
+        "name": "Ceramic Mug 350ml - Sand",
+        "quantity": 1,
+        "originalUnitPriceSet": {
+         "shopMoney": {
+          "amount": "179.99"
+         }
+        }
+       },
+       {
+        "id": "gid://shopify/LineItem/15000000000005",
+        "sku": null,
+        "name": "Gift wrapping",
+        "quantity": 1,
+        "originalUnitPriceSet": {
+         "shopMoney": {
+          "amount": "25.00"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "extensions": {
+  "cost": {
+   "requestedQueryCost": 62,
+   "actualQueryCost": 52,
+   "throttleStatus": {
+    "maximumAvailable": 2000.0,
+    "currentlyAvailable": 20,
+    "restoreRate": 100.0
+   }
+  }
+ }
+}

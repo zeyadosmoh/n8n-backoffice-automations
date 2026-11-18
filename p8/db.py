@@ -30,10 +30,14 @@ def migrate(conn: psycopg.Connection) -> list[str]:
     return applied
 
 
-def seed_products(conn: psycopg.Connection, seed: int = 42) -> int:
-    """Insert the synthetic catalog. Existing SKUs are left alone (prices/stock may have changed since)."""
+def seed_products(conn: psycopg.Connection, seed: int = 42, inventory_ids: bool = True) -> int:
+    """Insert the synthetic catalog. Existing SKUs are left alone (prices/stock may have changed since).
+
+    inventory_ids=False (real Shopify store): leave inventory_item_id empty; the store assigns those ids and
+    scripts/seed_shopify.py writes them in.
+    """
     rows = [
-        (p.sku, p.name, p.price, p.initial_stock, p.reorder_point, p.inventory_item_id)
+        (p.sku, p.name, p.price, p.initial_stock, p.reorder_point, p.inventory_item_id if inventory_ids else None)
         for p in build_catalog(seed)
     ]
     with conn.transaction(), conn.cursor() as cur:

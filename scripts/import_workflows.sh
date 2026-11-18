@@ -8,6 +8,8 @@
 #
 # The credential file is built from .env in a private temp file, copied into the container, imported and deleted
 # on both sides. The workflow JSON files contain credential ids and names only, never secrets.
+# STORE_SOURCE=shopify points the Postgres credential at SHOPIFY_POSTGRES_DB and makes WF1 save failed runs only
+# (scripts/prepare_import.py).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -73,33 +75,10 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"; docker exec -u root "$C" rm -rf /tmp/p8-import >/dev/null 2>&1 || true' EXIT
 chmod 700 "$TMP"
 
+# Credentials (and, for STORE_SOURCE=shopify, the Postgres database) come from scripts/prepare_import.py.
 PG_HOST=${PG_HOST:-postgres} PG_PORT_IN=${PG_PORT_IN:-5432} SMTP_HOST=${SMTP_HOST:-mailpit} \
-SMTP_PORT_IN=${SMTP_PORT_IN:-1025} python3 - "$TMP/creds.cred.json" <<'PY'
-import json, os, sys
-e = os.environ
-creds = [
-    {"id": "p8PostgresCred01", "name": "P8 Postgres", "type": "postgres",
-     "data": {"host": e["PG_HOST"], "port": int(e["PG_PORT_IN"]), "database": e["POSTGRES_DB"],
-              "user": e["POSTGRES_USER"], "password": e["POSTGRES_PASSWORD"], "ssl": "disable"}},
-    {"id": "p8StoreApiCred01", "name": "P8 store API", "type": "httpHeaderAuth",
-     "data": {"name": "X-Shopify-Access-Token", "value": e["STORE_API_TOKEN"]}},
-    {"id": "p8WebhookCred001", "name": "P8 run-now token", "type": "httpHeaderAuth",
-     "data": {"name": "X-P8-Token", "value": e["N8N_WEBHOOK_TOKEN"]}},
-    {"id": "p8MailpitSmtp001", "name": "P8 SMTP (Mailpit)", "type": "smtp",
-     "data": {"host": e["SMTP_HOST"], "port": int(e["SMTP_PORT_IN"]), "secure": False, "disableStartTls": True,
-              "user": "", "password": ""}},
-    {"id": "p8GeminiCred0001", "name": "P8 Gemini API", "type": "httpHeaderAuth",
-     "data": {"name": "x-goog-api-key", "value": e.get("GEMINI_API_KEY") or "not-configured"}},
-    # Shopify Dev Dashboard app (client credentials grant). The secret lives only in this n8n credential; n8n's
-    # Custom Auth adds these fields to the token request's JSON body.
-    {"id": "p8ShopifyApp0001", "name": "P8 Shopify app", "type": "httpCustomAuth",
-     "data": {"json": json.dumps({"body": dict(client_id=e.get("SHOPIFY_CLIENT_ID") or "not-configured",
-                                               client_secret=e.get("SHOPIFY_CLIENT_SECRET") or "not-configured")})}},
-]
-fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, "w") as f:
-    json.dump(creds, f)
-PY
+SMTP_PORT_IN=${SMTP_PORT_IN:-1025} python3 scripts/prepare_import.py creds "$TMP/creds.cred.json"
+echo "store source: ${STORE_SOURCE:-mock}"
 
 # Files are streamed in (not `docker cp`) so the container's own user creates them: `docker cp` keeps the host
 # owner (e.g. uid 1001 on GitHub runners), and n8n (uid 1000) could not read a 0600 credential file.
@@ -111,9 +90,18 @@ out=$(docker exec "$C" n8n import:credentials --input=/tmp/p8-import/creds.json 
 echo "$out" | grep -E "Successfully" || true
 docker exec -u root "$C" rm -f /tmp/p8-import/creds.json
 
+# Sub-workflows (Execute Workflow Trigger) first: n8n refuses to publish a workflow whose sub-workflow is not
+# published yet.
+mapfile -t WFS < <(python3 -c '
+import glob, json
+fs = sorted(glob.glob("workflows/*.json"))
+sub = lambda f: any(n["type"] == "n8n-nodes-base.executeWorkflowTrigger" for n in json.load(open(f))["nodes"])
+print("\n".join(sorted(fs, key=lambda f: (not sub(f), f))))
+')
 ids=()
-for wf in workflows/*.json; do
-  put "$wf" "/tmp/p8-import/$(basename "$wf")"
+for wf in "${WFS[@]}"; do
+  python3 scripts/prepare_import.py workflow "$wf" "$TMP/$(basename "$wf")"
+  put "$TMP/$(basename "$wf")" "/tmp/p8-import/$(basename "$wf")"
   out=$(docker exec "$C" n8n import:workflow --input="/tmp/p8-import/$(basename "$wf")" 2>&1) \
     || { echo "$out" >&2; echo "import failed: $wf" >&2; exit 1; }
   echo "$out" | grep -E "Successfully" || true

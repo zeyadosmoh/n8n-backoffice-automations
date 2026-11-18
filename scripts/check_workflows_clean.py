@@ -5,7 +5,8 @@ Checks every workflows/*.json:
   2. no value of a secret from .env (or the environment) appears anywhere in the file, including the run-now
      webhook token N8N_WEBHOOK_TOKEN and the Shopify app's SHOPIFY_CLIENT_SECRET;
   3. no token-shaped strings (Shopify/Google/GitHub tokens, private keys, bearer headers) and no hard-coded
-     auth headers in HTTP/webhook nodes;
+     auth headers in HTTP/webhook nodes. One exception: WF1's "Fetch GraphQL page" may send exactly one header,
+     X-Shopify-Access-Token, whose value is exactly the expression that reads the token sub-workflow's output;
   4. every run-now webhook uses Header Auth with the shared credential, and email addresses are placeholders only;
   5. the error workflow builds the execution link from N8N_EDITOR_BASE_URL, not a hard-coded host.
 
@@ -34,6 +35,11 @@ TOKEN_PATTERNS = {
 }
 SECRET_KEYS = {"password", "token", "apikey", "api_key", "secret", "value", "accesstoken", "x-p8-token",
                "x-shopify-access-token", "x-goog-api-key", "authorization"}
+# (workflow id, node name) -> the only header that node may send, and its only allowed (expression) value.
+HEADER_EXCEPTIONS = {
+    ("p8OrdersSync0001", "Fetch GraphQL page"):
+        ("X-Shopify-Access-Token", "={{ $('Get Shopify token').first().json.token }}"),
+}
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 OK_EMAIL = re.compile(r"@([a-z0-9-]+\.)*(example\.(com|org|net)|example|test|invalid)$", re.I)
 
@@ -85,8 +91,17 @@ def check_file(path: Path, secrets: dict[str, str]) -> list[str]:
             if params.get("authentication") != "headerAuth" or "httpHeaderAuth" not in (node.get("credentials") or {}):
                 problems.append(f"node {name!r}: run-now webhook without Header Auth credential")
         if t == "n8n-nodes-base.httpRequest":
-            if params.get("sendHeaders") or params.get("sendQuery"):
-                problems.append(f"node {name!r}: sends custom headers/query; auth must come from a credential")
+            allowed = HEADER_EXCEPTIONS.get((wf.get("id"), name))
+            if params.get("sendQuery"):
+                problems.append(f"node {name!r}: sends custom query parameters; auth must come from a credential")
+            if params.get("sendHeaders"):
+                if not allowed:
+                    problems.append(f"node {name!r}: sends custom headers; auth must come from a credential")
+                else:
+                    headers = (params.get("headerParameters") or {}).get("parameters") or []
+                    if params.get("specifyHeaders", "keypair") != "keypair" or [
+                            (h.get("name"), h.get("value")) for h in headers] != [allowed]:
+                        problems.append(f"node {name!r}: may only send header {allowed[0]} = {allowed[1]}")
         for p, v in walk(params):
             key = p.rsplit(".", 1)[-1].lower()
             if key in SECRET_KEYS - {"value"} and isinstance(v, str) and v and not v.startswith("="):

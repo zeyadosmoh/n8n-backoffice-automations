@@ -1,4 +1,4 @@
-"""python -m p8 {migrate,seed-products,sample-pricelists}"""
+"""python -m p8 {migrate,seed-products,sample-pricelists} [--source mock|shopify]"""
 
 from __future__ import annotations
 
@@ -7,15 +7,18 @@ import sys
 
 import psycopg
 
-from .config import load_env, pg_dsn
+from .config import db_name, ensure_database, load_env, pg_dsn
 from .db import migrate, seed_products
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="p8")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("migrate", help="apply db/migrations")
-    sub.add_parser("seed-products", help="insert the synthetic catalog into products")
+    for name, help_ in [("migrate", "apply db/migrations"), ("seed-products", "insert the synthetic catalog")]:
+        sp = sub.add_parser(name, help=help_)
+        sp.add_argument("--source", choices=["mock", "shopify"], default=None,
+                        help="which store's database (default: STORE_SOURCE, else mock). "
+                             "shopify = SHOPIFY_POSTGRES_DB, created if missing")
     sp = sub.add_parser("sample-pricelists", help="write synthetic supplier price lists to samples/")
     sp.add_argument("--out", default="samples")
     args = ap.parse_args(argv)
@@ -27,12 +30,18 @@ def main(argv: list[str] | None = None) -> int:
         for path in write_samples(args.out, seed=int(env.get("MOCK_SEED", "42"))):
             print(path)
         return 0
-    with psycopg.connect(pg_dsn(env)) as conn:
+    source = args.source or (env.get("STORE_SOURCE") or "mock")
+    dbname = db_name(env, source)
+    if source == "shopify" and ensure_database(env, dbname):
+        print("created database", dbname)
+    with psycopg.connect(pg_dsn(env, dbname=dbname)) as conn:
         if args.cmd == "migrate":
             applied = migrate(conn)
-            print("applied:", ", ".join(applied) if applied else "nothing (up to date)")
+            print(f"[{dbname}] applied:", ", ".join(applied) if applied else "nothing (up to date)")
         elif args.cmd == "seed-products":
-            print("products:", seed_products(conn, seed=int(env.get("MOCK_SEED", "42"))))
+            # Shopify mode: the store assigns inventory item ids; scripts/seed_shopify.py writes them in.
+            n = seed_products(conn, seed=int(env.get("MOCK_SEED", "42")), inventory_ids=source == "mock")
+            print(f"[{dbname}] products:", n)
     return 0
 
 

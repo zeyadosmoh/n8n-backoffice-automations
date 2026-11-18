@@ -1,0 +1,103 @@
+{
+ "_note": "Synthetic data in the GraphQL Admin API 2026-10 response shape.",
+ "data": {
+  "orders": {
+   "pageInfo": {
+    "hasNextPage": true,
+    "endCursor": "eyJsYXN0X2lkIjo2MDAwMDAwMDAwMDAyfQ=="
+   },
+   "nodes": [
+    {
+     "id": "gid://shopify/Order/6000000000001",
+     "name": "#1001",
+     "createdAt": "2026-11-19T08:00:01Z",
+     "processedAt": "2026-10-25T09:15:00Z",
+     "updatedAt": "2026-11-19T08:00:01Z",
+     "cancelledAt": null,
+     "displayFinancialStatus": "PAID",
+     "displayFulfillmentStatus": "UNFULFILLED",
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "1309.97",
+       "currencyCode": "EGP"
+      }
+     },
+     "lineItems": {
+      "pageInfo": {
+       "hasNextPage": false
+      },
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/15000000000001",
+        "sku": "SKU-1001",
+        "name": "Ceramic Mug 350ml - Sand",
+        "quantity": 2,
+        "originalUnitPriceSet": {
+         "shopMoney": {
+          "amount": "179.99"
+         }
+        }
+       },
+       {
+        "id": "gid://shopify/LineItem/15000000000002",
+        "sku": "SKU-1010",
+        "name": "Cotton Throw Blanket - Cream",
+        "quantity": 1,
+        "originalUnitPriceSet": {
+         "shopMoney": {
+          "amount": "949.99"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "gid://shopify/Order/6000000000002",
+     "name": "#1002",
+     "createdAt": "2026-11-19T08:00:13Z",
+     "processedAt": "2026-11-02T14:40:00Z",
+     "updatedAt": "2026-11-19T08:01:30Z",
+     "cancelledAt": null,
+     "displayFinancialStatus": "PAID",
+     "displayFulfillmentStatus": "FULFILLED",
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "419.97",
+       "currencyCode": "EGP"
+      }
+     },
+     "lineItems": {
+      "pageInfo": {
+       "hasNextPage": false
+      },
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/15000000000003",
+        "sku": "SKU-1005",
+        "name": "Linen Tea Towel - Natural",
+        "quantity": 3,
+        "originalUnitPriceSet": {
+         "shopMoney": {
+          "amount": "139.99"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "extensions": {
+  "cost": {
+   "requestedQueryCost": 62,
+   "actualQueryCost": 52,
+   "throttleStatus": {
+    "maximumAvailable": 2000.0,
+    "currentlyAvailable": 1938,
+    "restoreRate": 100.0
+   }
+  }
+ }
+}

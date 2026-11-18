@@ -1,0 +1,23 @@
+{
+ "_note": "Synthetic data in the GraphQL Admin API 2026-10 response shape.",
+ "errors": [
+  {
+   "message": "Throttled",
+   "extensions": {
+    "code": "THROTTLED",
+    "documentation": "https://shopify.dev/api/usage/rate-limits"
+   }
+  }
+ ],
+ "extensions": {
+  "cost": {
+   "requestedQueryCost": 62,
+   "actualQueryCost": 0,
+   "throttleStatus": {
+    "maximumAvailable": 2000.0,
+    "currentlyAvailable": 12,
+    "restoreRate": 100.0
+   }
+  }
+ }
+}

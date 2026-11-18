@@ -34,6 +34,10 @@ SHOPIFY_TOKEN_WORKFLOW_ID = "p8ShopifyToken01"
 SAVE_NOTHING = {"saveDataSuccessExecution": "none", "saveDataErrorExecution": "none", "saveManualExecutions": False,
                 "saveExecutionProgress": False}
 FOOTER = "P8 back-office automations · synthetic data"
+SHOPIFY_GRAPHQL_NODE = "Fetch GraphQL page"
+APPLY_PAGE_SQL = ("select case $1 when 'orders' then p8_sync_orders_page($2::jsonb)\n"
+                  "            else p8_sync_inventory_page($2::jsonb) end as result;")
+APPLY_PAGE_PARAMS = "={{ [ $json.stream, JSON.stringify($json.payload) ] }}"
 
 
 def js(name: str) -> str:
@@ -114,6 +118,18 @@ class Workflow:
 
 
 # ---------------------------------------------------------------------------------------------------------------
+def switch_on_action(w: Workflow, name, pos, actions):
+    """Switch on $json.action with one named output per action (in order)."""
+    rules = [{
+        "conditions": {
+            "options": {"caseSensitive": True, "leftValue": "", "typeValidation": "strict", "version": 2},
+            "conditions": [{"id": str(uuid.uuid5(NS, f"{w.id}/{name}/{a}")), "leftValue": "={{ $json.action }}",
+                            "rightValue": a, "operator": {"type": "string", "operation": "equals"}}],
+            "combinator": "and"},
+        "renameOutput": True, "outputKey": a} for a in actions]
+    return w.node(name, "n8n-nodes-base.switch", 3.2, {"rules": {"values": rules}, "options": {}}, pos)
+
+
 def orders_sync() -> Workflow:
     w = Workflow("p8OrdersSync0001", "P8 · Orders sync (hourly) + daily Excel export")
     # sync loop
@@ -123,35 +139,86 @@ def orders_sync() -> Workflow:
     w.sql("Load cursors",
           "select p8_sync_since('orders') as orders_since, p8_sync_since('inventory_levels') as inventory_since;",
           (240, 100))
-    w.code("Start streams", "orders_start_streams", (480, 100))
-    w.node("Next request", "n8n-nodes-base.noOp", 1, {}, (720, 100))
+    w.if_true("Shopify store?", "={{ $env.STORE_SOURCE }}", "shopify", (480, 100))
+
+    # mock store (default): REST pages with Link-header pagination
+    w.code("Start streams", "orders_start_streams", (720, 100))
+    w.node("Next request", "n8n-nodes-base.noOp", 1, {}, (960, 100))
     w.node("Fetch page", "n8n-nodes-base.httpRequest", 4.2, {
         "url": "={{ $json.url }}",
         "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
         "options": {"timeout": 30000,
                     "response": {"response": {"fullResponse": True, "neverError": True, "responseFormat": "json"}}},
-    }, (960, 100), creds="store", onError="continueRegularOutput")
-    w.code("Check response", "orders_check_response", (1200, 100), each=True)
-    w.if_true("Retry or apply?", "={{ $json.action }}", "retry", (1440, 100))
+    }, (1200, 100), creds="store", onError="continueRegularOutput")
+    w.code("Check response", "orders_check_response", (1440, 100), each=True)
+    w.if_true("Retry or apply?", "={{ $json.action }}", "retry", (1680, 100))
     w.node("Back off", "n8n-nodes-base.wait", 1.1,
-           {"amount": "={{ $json.waitSeconds }}", "unit": "seconds"}, (1680, -60),
+           {"amount": "={{ $json.waitSeconds }}", "unit": "seconds"}, (1920, -60),
            webhookId=str(uuid.uuid5(NS, "wait/orders")))
-    w.sql("Apply page (one transaction)",
-          "select case $1 when 'orders' then p8_sync_orders_page($2::jsonb)\n"
-          "            else p8_sync_inventory_page($2::jsonb) end as result;",
-          (1680, 200), params="={{ [ $json.stream, JSON.stringify($json.payload) ] }}")
-    w.code("Next page?", "orders_next_page", (1920, 200), each=True)
-    w.if_true("More to fetch?", "={{ $json.done }}", False, (2160, 200), op="false", kind="boolean")
-    w.code("Sync summary", "orders_summary", (2400, 300))
+    w.sql("Apply page (one transaction)", APPLY_PAGE_SQL, (1920, 200), params=APPLY_PAGE_PARAMS)
+    w.code("Next page?", "orders_next_page", (2160, 200), each=True)
+    w.if_true("More to fetch?", "={{ $json.done }}", False, (2400, 200), op="false", kind="boolean")
+    w.code("Sync summary", "orders_summary", (2640, 300))
     w.connect("Every hour", "Load cursors")
     w.connect("Run now (webhook)", "Load cursors")
-    w.chain("Load cursors", "Start streams", "Next request", "Fetch page", "Check response", "Retry or apply?")
+    w.chain("Load cursors", "Shopify store?")
+    w.connect("Shopify store?", "Get Shopify token", 0)
+    w.connect("Shopify store?", "Start streams", 1)
+    w.chain("Start streams", "Next request", "Fetch page", "Check response", "Retry or apply?")
     w.connect("Retry or apply?", "Back off", 0)
     w.connect("Retry or apply?", "Apply page (one transaction)", 1)
     w.connect("Back off", "Next request")
     w.chain("Apply page (one transaction)", "Next page?", "More to fetch?")
     w.connect("More to fetch?", "Next request", 0)
     w.connect("More to fetch?", "Sync summary", 1)
+
+    # real Shopify dev store (STORE_SOURCE=shopify): GraphQL Admin API, cursor pagination, cost-based throttling
+    y = -480
+    w.node("Get Shopify token", "n8n-nodes-base.executeWorkflow", 1.2, {
+        "source": "database",
+        "workflowId": {"__rl": True, "value": SHOPIFY_TOKEN_WORKFLOW_ID, "mode": "id"},
+        "options": {"waitForSubWorkflow": True}}, (720, y))
+    w.code("Start Shopify streams", "shopify_start_streams", (960, y))
+    w.node("Next GraphQL request", "n8n-nodes-base.noOp", 1, {}, (1200, y))
+    # The one node allowed to send a header itself: the access token, as an expression that reads the token
+    # sub-workflow's output (scripts/check_workflows_clean.py enforces exactly this).
+    w.node(SHOPIFY_GRAPHQL_NODE, "n8n-nodes-base.httpRequest", 4.2, {
+        "method": "POST",
+        "url": "=https://{{ $env.SHOPIFY_SHOP }}/admin/api/{{ $env.SHOPIFY_API_VERSION }}/graphql.json",
+        "sendHeaders": True,
+        "headerParameters": {"parameters": [
+            {"name": "X-Shopify-Access-Token", "value": "={{ $('Get Shopify token').first().json.token }}"}]},
+        "sendBody": True, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $json.streams[$json.idx].query, variables: { "
+                    "first: $json.streams[$json.idx].first, after: $json.after, q: $json.streams[$json.idx].q } }) }}",
+        "options": {"timeout": 30000,
+                    "response": {"response": {"fullResponse": True, "neverError": True, "responseFormat": "json"}}},
+    }, (1440, y), onError="continueRegularOutput")
+    w.code("Check GraphQL response", "shopify_check_response", (1680, y), each=True)
+    switch_on_action(w, "Route Shopify page", (1920, y), ["apply", "next", "retry", "reauth"])
+    w.sql("Apply Shopify page (one transaction)", APPLY_PAGE_SQL, (2160, y - 160), params=APPLY_PAGE_PARAMS)
+    w.code("Next Shopify page?", "shopify_next_page", (2400, y - 80), each=True)
+    w.if_true("More Shopify pages?", "={{ $json.done }}", False, (2640, y - 80), op="false", kind="boolean")
+    w.if_true("Pause for points?", "={{ $json.waitSeconds }}", 0, (2880, y - 160), op="gt", kind="number")
+    w.node("Wait (Shopify)", "n8n-nodes-base.wait", 1.1,
+           {"amount": "={{ $json.waitSeconds }}", "unit": "seconds"}, (2160, y + 80),
+           webhookId=str(uuid.uuid5(NS, "wait/shopify")))
+    w.sql("Forget cached token", "delete from shopify_token where shop = $1;", (2160, y + 240),
+          params="={{ [ $env.SHOPIFY_SHOP ] }}")
+    w.code("Token rejected", "shopify_token_rejected", (2400, y + 240))
+    w.chain("Get Shopify token", "Start Shopify streams", "Next GraphQL request", SHOPIFY_GRAPHQL_NODE,
+            "Check GraphQL response", "Route Shopify page")
+    w.connect("Route Shopify page", "Apply Shopify page (one transaction)", 0)
+    w.connect("Route Shopify page", "Next Shopify page?", 1)
+    w.connect("Route Shopify page", "Wait (Shopify)", 2)
+    w.connect("Route Shopify page", "Forget cached token", 3)
+    w.chain("Apply Shopify page (one transaction)", "Next Shopify page?", "More Shopify pages?")
+    w.connect("More Shopify pages?", "Pause for points?", 0)
+    w.connect("More Shopify pages?", "Sync summary", 1)
+    w.connect("Pause for points?", "Wait (Shopify)", 0)
+    w.connect("Pause for points?", "Next GraphQL request", 1)
+    w.connect("Wait (Shopify)", "Next GraphQL request")
+    w.chain("Forget cached token", "Token rejected")
 
     # daily Excel export
     w.node("Daily 23:55", "n8n-nodes-base.scheduleTrigger", 1.2,
