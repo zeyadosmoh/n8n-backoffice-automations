@@ -1,0 +1,90 @@
+# P8 stack (synthetic data). Every port is bound to 127.0.0.1.
+#   dev:  docker compose up -d                      (project "p8": 5680 / 5438 / 8780 / 1026 / 8026)
+#   e2e:  tests/e2e/stack.py starts project "p8-e2e" from this same file on 5681 / 5439 / 8781 / 1027 / 8027
+#         with throwaway volumes (`down -v` afterwards).
+name: p8
+
+services:
+  postgres:
+    image: postgres:16.15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: Africa/Cairo
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5438}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  mock-store:
+    build:
+      context: .
+      dockerfile: mock_store/Dockerfile
+    image: p8-mock-store:0.1.0
+    environment:
+      STORE_API_TOKEN: ${STORE_API_TOKEN}
+      MOCK_ADMIN_TOKEN: ${MOCK_ADMIN_TOKEN}
+      MOCK_SEED: ${MOCK_SEED:-42}
+      MOCK_FAIL_RATE: ${MOCK_FAIL_RATE:-0}
+      MOCK_BUCKET_SIZE: ${MOCK_BUCKET_SIZE:-40}
+      MOCK_LEAK_RPS: ${MOCK_LEAK_RPS:-2}
+      TZ: Africa/Cairo
+    ports:
+      - "127.0.0.1:${MOCK_STORE_PORT:-8780}:8000"
+    restart: unless-stopped
+
+  # Local SMTP sink: every email lands here, nothing leaves the machine.
+  mailpit:
+    image: axllent/mailpit:v1.32.0
+    environment:
+      MP_MAX_MESSAGES: "1000"
+    ports:
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-1026}:1025"
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8026}:8025"
+    restart: unless-stopped
+
+  # n8n keeps its own data (SQLite + its generated encryption key) in the n8n_data volume.
+  # Only non-secret settings are passed in; tokens and passwords live in n8n credentials (scripts/import_workflows.sh).
+  n8n:
+    image: n8nio/n8n:2.47.2
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:${N8N_PORT_HOST:-5680}/
+      N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-http://localhost:5680}
+      GENERIC_TIMEZONE: Africa/Cairo
+      TZ: Africa/Cairo
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"   # workflows read the non-secret settings below via $env
+      N8N_RESTRICT_FILE_ACCESS_TO: /files/exports
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_PRUNE_MAX_COUNT: "2000"
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO}
+      AI_MATCH_ENABLED: ${AI_MATCH_ENABLED:-false}
+      AI_MATCH_MIN_CONFIDENCE: ${AI_MATCH_MIN_CONFIDENCE:-0.85}
+      LLM_MODEL: ${LLM_MODEL:-gemini-3.5-flash-lite}
+      STORE_API_BASE: http://mock-store:8000/admin/api/2025-10
+    ports:
+      - "127.0.0.1:${N8N_PORT_HOST:-5680}:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ${EXPORTS_DIR:-./exports}:/files/exports
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  n8n_data:

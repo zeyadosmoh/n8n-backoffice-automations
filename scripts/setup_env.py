@@ -9,7 +9,6 @@ REPLACEMENTS = {
     "POSTGRES_PASSWORD": lambda: secrets.token_urlsafe(24),
     "STORE_API_TOKEN": lambda: "shpat_" + secrets.token_hex(16),
     "MOCK_ADMIN_TOKEN": lambda: secrets.token_urlsafe(24),
-    "N8N_ENCRYPTION_KEY": lambda: secrets.token_urlsafe(32),
     "N8N_WEBHOOK_TOKEN": lambda: secrets.token_urlsafe(32),
 }
 
