@@ -42,7 +42,9 @@ def _compose(env_file: Path, *args: str, check=True) -> subprocess.CompletedProc
                           check=check, capture_output=True, text=True, env=_clean_env())
 
 
-def write_env() -> Path:
+def write_env(extra: dict[str, str] | None = None) -> Path:
+    """.e2e/.env with fresh random secrets; `extra` adds/overrides values (the Shopify live test passes the
+    SHOPIFY_* settings from .env, so this file then holds the client secret: 0600, gitignored, deleted on teardown)."""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("setup_env", ROOT / "scripts" / "setup_env.py")
@@ -56,6 +58,7 @@ def write_env() -> Path:
         "AI_MATCH_ENABLED": "true",
         "GEMINI_API_BASE": "http://mock-store:8000/_fake_gemini/v1beta",
         "MOCK_FAIL_RATE": "0",
+        **(extra or {}),
     }
     lines = []
     for line in text.splitlines():
@@ -75,6 +78,7 @@ class Stack:
     env: dict[str, str]
     exports_dir: Path
     env_file: Path | None = None
+    dbname: str | None = None            # None = POSTGRES_DB; the Shopify live test uses SHOPIFY_POSTGRES_DB
 
     # -- endpoints ----------------------------------------------------------------------------------
     @property
@@ -95,7 +99,7 @@ class Stack:
 
     def db(self) -> psycopg.Connection:
         env = {**self.env, "POSTGRES_HOST": "127.0.0.1"}
-        return psycopg.connect(pg_dsn(env), autocommit=True, row_factory=dict_row)
+        return psycopg.connect(pg_dsn(env, dbname=self.dbname), autocommit=True, row_factory=dict_row)
 
     def q(self, sql: str, params=None) -> list[dict]:
         with self.db() as c:
@@ -164,12 +168,12 @@ class Stack:
         return httpx.get(f"{self.mailpit}/api/v1/message/{msg['ID']}/part/{a['PartID']}", timeout=10).text
 
 
-def local_stack() -> Stack:
-    env_file = write_env()
+def local_stack(extra: dict[str, str] | None = None, prepare=None) -> Stack:
+    env_file = write_env(extra)
     _compose(env_file, "down", "-v", check=False)
     _compose(env_file, "up", "-d", "--build", "--wait")
     stack = Stack(env=load_env(env_file, use_environ=False), exports_dir=E2E_DIR / "exports", env_file=env_file)
-    prepare_db(stack)
+    (prepare or prepare_db)(stack)
     subprocess.run(["scripts/import_workflows.sh"], cwd=ROOT, check=True, capture_output=True, text=True,
                    env={**_clean_env(), "ENV_FILE": str(env_file), "PROJECT": PROJECT})
     stack.wait_ready()
@@ -196,9 +200,11 @@ def prepare_db(stack: Stack) -> None:
     raise RuntimeError("Postgres for the e2e stack is not reachable")
 
 
-def teardown(stack: Stack) -> None:
+def teardown(stack: Stack, forget_env: bool = False) -> None:
     if stack.env_file and os.environ.get("E2E_KEEP") != "1":
         _compose(stack.env_file, "down", "-v", check=False)
+        if forget_env:
+            stack.env_file.unlink(missing_ok=True)
 
 
 def xlsx_rows(path: Path) -> list[list]:

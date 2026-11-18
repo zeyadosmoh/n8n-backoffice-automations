@@ -23,5 +23,8 @@ include = ["p8*", "mock_store*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-markers = ["e2e: needs the p8-e2e stack (n8n, Postgres, Mailpit, mock store)"]
+markers = [
+    "e2e: needs the p8-e2e stack (n8n, Postgres, Mailpit, mock store)",
+    "shopify_live: opt-in, runs WF1 against the real Shopify dev store (pytest -m shopify_live tests/live; never in CI)",
+]
 filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
