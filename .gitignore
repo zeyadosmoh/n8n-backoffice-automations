@@ -1,0 +1,25 @@
+# secrets
+.env
+.env.*
+!.env.example
+*.cred.json
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# generated files (Excel exports, rejects files, e2e logs)
+exports/*
+!exports/.gitkeep
+.e2e/
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store
+~$*

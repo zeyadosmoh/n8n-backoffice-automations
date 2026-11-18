@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "p8-n8n-backoffice"
+version = "0.1.0"
+description = "Three back-office n8n workflows for a small online store (synthetic data)."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "psycopg[binary]>=3.2",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "httpx>=0.27"]
+
+[tool.setuptools.packages.find]
+include = ["p8*", "mock_store*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["e2e: needs the p8-e2e stack (n8n, Postgres, Mailpit, mock store)"]
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
