@@ -311,6 +311,9 @@ What `seed_shopify.py` creates:
 
 ### How the Shopify mode works
 
+![Workflow 1 with the Shopify branch](docs/img/wf-orders-sync-shopify.png)
+*Workflow 1: `STORE_SOURCE=shopify` takes the GraphQL loop at the top; the mock loop below is unchanged.*
+
 - **Separate database.** Shopify mode uses `p8_shopify` on the same Postgres. Shopify's ids differ from the mock's,
   and the two stores' rows never mix. The SQL functions, the cursor and the idempotency rules are the same, because
   the GraphQL answers are mapped into exactly the mock's staging shape.
@@ -346,6 +349,9 @@ What `seed_shopify.py` creates:
   the Admin API rejects that (401) while accepting the same token in `X-Shopify-Access-Token`. The live test's first
   check fails if the token endpoint stops accepting JSON. The token sub-workflow would then fail with the HTTP
   status, and the failure email fires.
+
+![Synthetic orders on the Shopify dev store](docs/img/shopify-orders.png)
+*The dev store's synthetic orders (EGP, `example.com` buyers, tagged `p8-synthetic`).*
 
 ### Numbers from the live run (2026-11-19, dev store in EGP / Africa/Cairo)
 
@@ -444,16 +450,18 @@ Taken from the local run above. All addresses are `example.com` placeholders and
 | [`rejects-csv.png`](docs/img/rejects-csv.png) | The rejects file opened (row, SKU, name, price, reason) |
 | [`email-failure.png`](docs/img/email-failure.png) | Failure email (workflow, node, message, execution link) |
 
-**To take for the Shopify section** (not in the repo yet; every value on screen is synthetic, so crop out the
-browser's account menu):
+**Shopify mode** (dev store with the synthetic seed; every buyer is an `example.com` placeholder):
 
-| File | What it should show |
+| File | What it shows |
 |---|---|
-| `shopify-app-scopes.png` | Dev Dashboard: the app's version with its 7 Admin API scopes and custom distribution (no secret on screen) |
+| [`shopify-app-scopes.png`](docs/img/shopify-app-scopes.png) | Dev Dashboard: version v1 of the "P8 back-office sync" app with its 7 Admin API scopes and API version 2026-10 (no secret on screen) |
+| [`shopify-orders.png`](docs/img/shopify-orders.png) | Store admin, Orders: the synthetic orders in EGP with `@example.com` buyers and `p8-seed-NNNN` / `p8-synthetic` tags; the live-test order #1151 is shown cancelled |
+| [`wf-orders-sync-shopify.png`](docs/img/wf-orders-sync-shopify.png) | WF1 canvas with the "Shopify store?" switch: the GraphQL loop (token → fetch → route → apply / next / wait / forget token) above the unchanged mock loop |
+| [`email-low-stock-shopify.png`](docs/img/email-low-stock-shopify.png) | Low-stock email from the dev stack in Shopify mode (2026-11-19): 3 SKUs below their reorder point, sorted by days of stock left: SKU-1039 (stock 1 / reorder 10, 7.0 days), SKU-1008 (14 / 25, 98.0 days), SKU-1050 (6 / 10, no sales in the last 14 days) |
+
+<!-- Not taken yet (add a row above once the file is in docs/img/):
 | `shopify-products.png` | Store admin, Products filtered by tag `p8-synthetic`: the 19 products, EGP prices, stock |
-| `shopify-orders.png` | Store admin, Orders filtered by tag `p8-synthetic`: dates spread over 30 days, `@example.com` buyers |
-| `wf-orders-sync-shopify.png` | WF1 canvas with the "Shopify store?" switch and the GraphQL loop (token → fetch → route → wait/apply) |
 | `wf-shopify-token.png` | The "P8 · Shopify token" sub-workflow canvas (cache hit vs. fetch + store) |
-| `n8n-execution-shopify.png` | A failed WF1 execution in Shopify mode, e.g. with a wrong `SHOPIFY_SHOP` (successful and manual runs are not saved) |
-| `email-low-stock-shopify.png` | Low-stock email from the dev stack in Shopify mode (2026-11-19): 3 SKUs below their reorder point, sorted by days of stock left: SKU-1039 (stock 1 / reorder 10, 7.0 days), SKU-1008 (14 / 25, 98.0 days), SKU-1050 (6 / 10, no sales in the last 14 days) |
+| `n8n-execution-shopify.png` | A failed WF1 execution in Shopify mode (successful and manual runs are not saved) |
 | `shopify-order-1151.png` | The live-test order #1151 in the store admin, cancelled with restock |
+-->
