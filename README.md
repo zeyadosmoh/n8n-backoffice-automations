@@ -455,5 +455,5 @@ browser's account menu):
 | `wf-orders-sync-shopify.png` | WF1 canvas with the "Shopify store?" switch and the GraphQL loop (token → fetch → route → wait/apply) |
 | `wf-shopify-token.png` | The "P8 · Shopify token" sub-workflow canvas (cache hit vs. fetch + store) |
 | `n8n-execution-shopify.png` | A failed WF1 execution in Shopify mode, e.g. with a wrong `SHOPIFY_SHOP` (successful and manual runs are not saved) |
-| `email-low-stock-shopify.png` | The low-stock email from the live run listing SKU-1010 |
+| `email-low-stock-shopify.png` | Low-stock email from the dev stack in Shopify mode (2026-11-19): 3 SKUs below their reorder point, sorted by days of stock left: SKU-1039 (stock 1 / reorder 10, 7.0 days), SKU-1008 (14 / 25, 98.0 days), SKU-1050 (6 / 10, no sales in the last 14 days) |
 | `shopify-order-1151.png` | The live-test order #1151 in the store admin, cancelled with restock |
