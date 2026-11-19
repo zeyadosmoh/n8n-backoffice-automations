@@ -60,6 +60,9 @@ class Shopify:
         self._client_id, self._client_secret = client_id, client_secret
         self._token: str | None = None
 
+    def __repr__(self) -> str:                 # never show the secret or the token in tracebacks / test output
+        return f"Shopify(shop={self.shop!r}, version={self.version!r})"
+
     def _post(self, url: str, data: bytes, headers: dict) -> tuple[int, dict, dict]:
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:

@@ -45,10 +45,18 @@ def test_token_endpoint_accepts_json_body(real_env):
                                  headers={"Content-Type": "application/json", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as r:
         answer = json.loads(r.read())
-    assert r.status == 200 and answer.get("access_token"), (
+        status = r.status
+    # Reduce the answer to booleans/numbers BEFORE asserting: pytest prints the operands of a failed assert, and
+    # the answer holds a live access token.
+    got_token = isinstance(answer.get("access_token"), str) and answer["access_token"].startswith("shp")
+    expires_in = answer.get("expires_in")
+    del answer
+    assert status == 200 and got_token, (
         "Shopify no longer accepts a JSON body on the token endpoint: the n8n token sub-workflow will fail. "
         "See README 'Real Shopify store'.")
-    assert answer.get("expires_in") == 86399
+    # A repeated request within the lifetime returns the same token with its remaining lifetime (<= 86399 s).
+    assert isinstance(expires_in, int) and 0 < expires_in <= 86399, expires_in
+    record(token_json_body_accepted=True, token_expires_in=expires_in)
 
 
 # 1. first run = full sync; DB matches Shopify
