@@ -7,8 +7,10 @@
 > customer data is used. Every email, Excel export and form page this project produces says so.
 
 A portfolio project for a freelance service: three back-office automations a small online store would pay for,
-built in **n8n 2.47.2** on PostgreSQL 16. They run against a mock Shopify-style store API that rate-limits and
-fails on purpose.
+built in **n8n 2.47.2** on PostgreSQL 16. By default they run against a mock Shopify-style store API that rate-limits
+and fails on purpose. Workflow 1 can also sync a **real Shopify development store** through the GraphQL Admin API
+(`STORE_SOURCE=shopify`, see [Real Shopify store](#real-shopify-store)), with the same synthetic catalog and
+synthetic orders.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
@@ -47,11 +49,20 @@ and `scripts/demo.py`) on 2026-11-18.
 - **AI kept on a leash.** With AI matching on, two supplier names only AI could match (plurals) went to `review.csv`
   with confidence 1.00 and **were not applied**. "Linen Towel Natural" (0.75, below the 0.85 threshold) was rejected
   with the AI's best guess in the reason. AI matching is off by default and only sees rows the rules could not match.
-- **No secrets in the exports.** The 4 workflow JSON files reference credentials by id and name only.
+- **The same sync on a real Shopify store.** Against a Shopify dev store (GraphQL Admin API 2026-10, synthetic
+  seed), the first run pulled **150 orders (241 lines) and 52 inventory levels in 2.5 s**, exactly matching Shopify's
+  own counts. The rerun changed **0 rows**. A new order pushed SKU-1010 below its reorder point, was synced, and was
+  alerted **once**. Details in [Real Shopify store](#real-shopify-store).
+- **No secrets in the exports.** The workflow JSON files reference credentials by id and name only.
   `scripts/check_workflows_clean.py` fails the build if any `.env` secret value (including the run-now webhook token)
   or a token-shaped string appears in them, or if a webhook lacks Header Auth. It runs in the secret scan and in CI.
-- **Tested end to end.** 67 pytest tests:
-  - 54 unit and SQL tests: mock API, every SQL function, samples, workflow leak checks.
+  The only node allowed to send its own header is WF1's Shopify GraphQL request, and only with the exact expression
+  that reads the token sub-workflow's output.
+- **Tested end to end.** 132 pytest tests:
+  - 114 unit and SQL tests: mock API, every SQL function, samples, workflow leak checks, secret scan, and the
+    Shopify branch (GraphQL fixtures → staging mapping, throttling, token cache, seed plan) run under `node`
+    against the shipped Code-node scripts.
+  - 5 opt-in live tests against the real Shopify dev store (never in CI).
   - 13 e2e tests that import the workflows into a throwaway n8n and trigger them through their webhooks and the
     form. They assert database rows and Mailpit emails (through the Mailpit API) and the Excel file. The same suite
     runs in GitHub Actions against n8n, Postgres and Mailpit service containers, with `REQUIRE_N8N=1`, so a skipped
@@ -199,7 +210,7 @@ python3 scripts/setup_env.py                 # .env with random secrets (never o
 docker compose up -d --build --wait          # n8n 5680, Postgres 5438, mock store 8780, Mailpit 1026/8026 (127.0.0.1)
 .venv/bin/python -m p8 migrate               # db/migrations (idempotent)
 .venv/bin/python -m p8 seed-products         # 52 synthetic SKUs
-scripts/import_workflows.sh                  # credentials from .env + 4 workflows -> n8n, published
+scripts/import_workflows.sh                  # credentials from .env + 5 workflows -> n8n, published
 .venv/bin/python scripts/demo.py             # replays every scenario above and prints the numbers
 .venv/bin/python -m pytest                   # unit + SQL tests (database p8_test); e2e skipped
 RUN_E2E=1 .venv/bin/python -m pytest tests/e2e   # throwaway n8n stack on 5681/5439/8781/1027/8027, ~3 min
@@ -237,26 +248,131 @@ and lowers inventory. `restock: {"SKU-1001": 50}` adds stock.
 Without a key, set `GEMINI_API_BASE=http://mock-store:8000/_fake_gemini/v1beta` to use the fake.
 
 **Secrets:**
-- `.env` (gitignored) holds the Postgres password, the store token, the mock admin token, the run-now webhook token
-  and the optional Gemini key. `.env.example` documents every variable.
+- `.env` (gitignored) holds the Postgres password, the store token, the mock admin token, the run-now webhook token,
+  the optional Gemini key and the optional Shopify app's client id and secret. `.env.example` documents every
+  variable.
 - n8n receives those values only as credentials, through `import_workflows.sh`, which writes a private temp file and
   deletes it on both sides. n8n generates its own encryption key in its data volume.
 - Every port is bound to 127.0.0.1.
 - The upload form has no login because it is only reachable locally. Before exposing it, switch the Form Trigger's
   authentication to n8n user login (or basic auth).
 
+## Real Shopify store
+
+Workflow 1 can sync a **real Shopify development store** instead of the mock: `STORE_SOURCE=shopify`. It uses the
+GraphQL Admin API (2026-10), and the data on the store is just as synthetic as the mock's: the same 52 SKUs, 150
+generated orders and `@example.com` buyers, all tagged `p8-synthetic`. The mock stays the default, and CI only ever
+uses the mock.
+
+### Setup
+
+Since 1 January 2026 Shopify no longer lets you create legacy custom apps in a store's admin. Apps come from the
+**Dev Dashboard** instead.
+
+1. In the [Dev Dashboard](https://dev.shopify.com), create a **development store** and an **app** in the same
+   organization. The token grant below only works when the app and the store belong to the same organization. A dev
+   store created from a store admin is outside it and fails with `shop_not_permitted`.
+2. Give the app's version these Admin API scopes: `read_orders`, `write_orders`, `read_products`, `write_products`,
+   `read_inventory`, `write_inventory` and `read_locations`. Choose **custom distribution** and install it on the dev
+   store. No customer scopes are needed: the seeded orders carry the buyer as an email on the order only, without a
+   customer record.
+3. Put the app's credentials in `.env`. They go nowhere else.
+   ```
+   STORE_SOURCE=shopify
+   SHOPIFY_SHOP=your-dev-store.myshopify.com
+   SHOPIFY_API_VERSION=2026-10
+   SHOPIFY_CLIENT_ID=...
+   SHOPIFY_CLIENT_SECRET=...
+   ```
+4. Seed the store, then run:
+   ```bash
+   .venv/bin/python scripts/seed_shopify.py --dry-run   # reads the store, prints the plan, writes nothing
+   .venv/bin/python scripts/seed_shopify.py             # 19 products / 52 SKUs + 150 orders (~34 min, see below)
+   docker compose up -d n8n                             # n8n picks up STORE_SOURCE / SHOPIFY_SHOP
+   scripts/import_workflows.sh                          # Postgres credential -> p8_shopify, WF1 saves failed runs only
+   curl -X POST -H "X-P8-Token: $N8N_WEBHOOK_TOKEN" http://127.0.0.1:5680/webhook/p8/orders-sync
+   .venv/bin/python -m pytest -m shopify_live tests/live -v   # opt-in live test (~3 min)
+   ```
+   To go back to the mock, set `STORE_SOURCE=mock`, then run `docker compose up -d n8n` and
+   `scripts/import_workflows.sh` again.
+
+What `seed_shopify.py` creates:
+- **Products:** one per catalog type (19), with one variant per SKU (52). They have the mock's prices and starting
+  stock, with inventory tracked at the primary location. Reorder points have no Shopify field, so they live in
+  Postgres.
+- **Orders:** 150, spread over the last 30 days through `processedAt`, inside the 60-day window `read_orders`
+  can see. Lines are picked by the catalog's popularity weights. The orders are paid, and most of the older ones are
+  fulfilled. No receipts are sent. Inventory behaviour is `BYPASS`: like the mock's seeded history, past orders do
+  not change the starting stock.
+- **Pacing:** dev stores accept **at most 5 new orders per minute**, so the script paces itself and can be stopped
+  and re-run. Existing products and orders (`p8-seed-NNNN` tags) are skipped.
+- **Inventory ids:** at the end, it writes Shopify's inventory item ids into `products` in the `p8_shopify`
+  database.
+
+### How the Shopify mode works
+
+- **Separate database.** Shopify mode uses `p8_shopify` on the same Postgres. Shopify's ids differ from the mock's,
+  and the two stores' rows never mix. The SQL functions, the cursor and the idempotency rules are the same, because
+  the GraphQL answers are mapped into exactly the mock's staging shape.
+- **Orders:** `orders(sortKey: UPDATED_AT, query: "updated_at:>='<cursor − 5 min>'")` with cursor pagination, 50 per
+  page and up to 50 line items each. An order with more lines fails the run loudly. `processedAt` becomes
+  `created_at`, the order date.
+- **Inventory:** `location.inventoryLevels` at the primary location, filtered by `updated_at`. The API has no sort
+  key for inventory levels, so all pages are collected and applied in **one** transaction.
+- **Rate limits.** Every answer's `extensions.cost.throttleStatus` is read. When the bucket holds fewer points than
+  the last query cost, the loop waits `(cost − available) / restoreRate` before the next page. On this dev store the
+  bucket was 2,000 points refilled at 100/s, and a page cost 58–72 points. `THROTTLED` and 429 answers wait for the
+  points (up to 20 times). 5xx and network errors back off 1, 2, 4, 8 and 16 s, then fail without moving the cursor.
+
+### Tokens (24 h) and where secrets live
+
+- **Token request:** the app gets Admin API tokens through the **client credentials grant**:
+  `POST https://{shop}/admin/oauth/access_token` with `grant_type`, `client_id` and `client_secret`.
+- **Lifetime:** tokens expire after **24 hours** (`expires_in` ≤ 86399). There is no refresh token; the same request
+  gets a new one. We observed that a repeat request within the lifetime returns the same token with its remaining
+  lifetime.
+- **Cache:** the **"P8 · Shopify token"** sub-workflow keeps the token in Postgres (`shopify_token`). It fetches a
+  new one when there is none or it expires within 1 hour. A `401` from the API deletes the cached token and fails
+  the run; the next run fetches a fresh one.
+- **Client secret:** it lives only in the n8n credential "P8 Shopify app", which `import_workflows.sh` builds from
+  `.env`. It is never in workflow JSON, never in a variable workflows can read, and never in logs. The token is
+  never in workflow JSON either. The leak check allows exactly one node (WF1's GraphQL request) to send one header
+  (`X-Shopify-Access-Token`), and only as the expression that reads the sub-workflow's output.
+- **Execution history:** the token sub-workflow saves **no execution data**, and in Shopify mode WF1 saves **failed
+  runs only**. A failed run's saved data can still contain the token (valid ≤ 24 h, local SQLite, pruned).
+- **Known risk: undocumented JSON body.** Shopify documents a form-encoded body for the token request, but n8n's
+  Custom Auth credential can only add fields to a JSON body. Shopify accepts JSON today, though this is not
+  documented. n8n's OAuth2 credential, which is form-encoded, was ruled out: it sends `Authorization: Bearer`, and
+  the Admin API rejects that (401) while accepting the same token in `X-Shopify-Access-Token`. The live test's first
+  check fails if the token endpoint stops accepting JSON. The token sub-workflow would then fail with the HTTP
+  status, and the failure email fires.
+
+### Numbers from the live run (2026-11-19, dev store in EGP / Africa/Cairo)
+
+- **Seed:** 19 products / 52 SKUs, then 150 orders (296 units) dated 2026-10-21 → 2026-11-18. It took about 34
+  minutes, almost all of it the 5-orders-per-minute dev-store limit. A second `--dry-run` found **0 to create**.
+- **First WF1 run** into an empty `p8_shopify`: **150 orders (241 line items) over 3 pages plus 52 inventory levels,
+  2.5 s.** The database matched Shopify: `ordersCount` 150 (exact), all 52 SKUs with the same available stock.
+  There were 0 throttle waits and 0 retries.
+- **Second run:** it re-read the 5-minute overlap window (23 orders, 52 levels) and changed **0 rows**.
+- **New order:** the test created order #1151, 21 × SKU-1010, which took stock from 35 to 14 with a reorder point of
+  15. The next WF1 run synced it: orders changed 1, inventory changed 1, `products.stock` 14. The next low-stock
+  email listed 4 SKUs including SKU-1010. A second alert run the same day sent **nothing**, and `alert_log` has
+  exactly one row for SKU-1010. The test then cancelled the order with restock, and stock went back to 35.
+- **Saved executions:** n8n's 8 saved executions contained **no** token.
+
 ## Repository layout
 
 ```
 mock_store/          FastAPI mock: catalog + seeded orders, inventory, pagination, rate limit, faults, fake Gemini
-db/migrations/       001 schema · 002 sync · 003 low stock · 004 price list (SQL functions)
-p8/                  CLI: migrate, seed-products, sample-pricelists
-workflows/*.json     the 4 importable n8n workflows (no secrets inside)
+db/migrations/       001 schema · 002 sync · 003 low stock · 004 price list · 005 Shopify token cache
+p8/                  CLI: migrate, seed-products, sample-pricelists (--source shopify for the real-store database)
+workflows/*.json     the 5 importable n8n workflows (4 + the Shopify token sub-workflow; no secrets inside)
 workflows/src/*.js   Code-node sources; scripts/build_workflows.py builds the JSON from them
-scripts/             setup_env.py · import_workflows.sh · build_workflows.py · check_workflows_clean.py
-                     · secret-scan.sh · demo.py
+scripts/             setup_env.py · import_workflows.sh · prepare_import.py · build_workflows.py
+                     · check_workflows_clean.py · secret-scan.sh · demo.py · seed_shopify.py
 samples/             synthetic supplier price lists (good, bad, names-only XLSX)
-tests/unit, tests/e2e
+tests/unit, tests/e2e, tests/live (opt-in, real Shopify store), tests/fixtures/shopify (synthetic GraphQL answers)
 ```
 
 ## Design trade-offs (one line each)
@@ -279,6 +395,13 @@ tests/unit, tests/e2e
   for non-manual executions, so tests must trigger workflows the way production does.
 - **SQLite for n8n's own data:** enough for one instance. The business data lives in Postgres.
 - **Gemini behind an HTTP Request node:** no community node needed. The base URL is a setting, so tests use a fake.
+- **Real Shopify: GraphQL mapped into the mock's staging shape:** the SQL functions, cursor and idempotency rules
+  are shared, so the real store adds a fetch branch, not a second sync engine.
+- **Own database for the real store (`p8_shopify`):** Shopify's inventory item ids differ from the mock's, and real
+  and mock rows never mix.
+- **Token cached in Postgres, client secret in an n8n credential:** n8n's OAuth2 credential sends `Bearer`, which the
+  Admin API rejects; Custom Auth can only send a JSON body, which Shopify accepts but does not document (a live test
+  watches for that changing).
 
 ## Tests
 
@@ -288,12 +411,21 @@ tests/unit/test_sync_sql.py             10  idempotent upsert, cursor only forwa
 tests/unit/test_low_stock_sql.py         5  days-left maths + order, once per Cairo day, retry unsent, day boundary
 tests/unit/test_price_list_sql.py        9  every reject reason, name rules, one-transaction apply, AI review only
 tests/unit/test_samples_and_fake_ai.py   5  samples deterministic and committed, fake Gemini behaviour
-tests/unit/test_workflows_clean.py      13  exports up to date and leak-free; the checker catches each leak type
+tests/unit/test_workflows_clean.py      20  exports up to date and leak-free; the checker catches each leak type,
+                                            incl. Shopify tokens/secret and the one allowed header
+tests/unit/test_secret_scan.py           5  scan catches token shapes and literal .env secrets, prints file:line only
+tests/unit/test_shopify_sync.py         24  GraphQL -> staging mapping, throttle/THROTTLED/5xx/401, full run through
+                                            the SQL + idempotent rerun, wiring, import prep (mock vs shopify mode)
+tests/unit/test_shopify_token.py        20  token cache SQL (hit, < 1 h, expired), response check, sub-workflow shape
+tests/unit/test_seed_shopify.py          4  seed plan = mock catalog, deterministic, in the 30-day window, synthetic
+tests/live/test_shopify_live.py          5  opt-in, real dev store: JSON token body, counts = Shopify, rerun 0 rows,
+                                            new order -> stock -> one alert, no token in saved executions
 tests/e2e/test_workflows_e2e.py         13  real n8n: tokens, sync twice = same rows, 500s/429s, failure email
                                             + link, Excel, alert once, Change A, rejects file, apply twice, AI review
 ```
 
-- `REQUIRE_DB=1` and `REQUIRE_N8N=1` turn skips into failures; CI sets both.
+- `REQUIRE_DB=1`, `REQUIRE_N8N=1` and `REQUIRE_NODE=1` turn skips into failures; CI sets them.
+- The Shopify live test is opt-in (`-m shopify_live` **and** `SHOPIFY_*` set) and never runs in CI.
 - CI (`.github/workflows/ci.yml`) has three jobs:
   - secret scan + workflow leak check + generator check;
   - unit tests on Python 3.12 and 3.14 with a Postgres service;
@@ -311,3 +443,17 @@ Taken from the local run above. All addresses are `example.com` placeholders and
 | [`email-price-list.png`](docs/img/email-price-list.png) | Summary email for `pricelist_bad.csv` |
 | [`rejects-csv.png`](docs/img/rejects-csv.png) | The rejects file opened (row, SKU, name, price, reason) |
 | [`email-failure.png`](docs/img/email-failure.png) | Failure email (workflow, node, message, execution link) |
+
+**To take for the Shopify section** (not in the repo yet; every value on screen is synthetic, so crop out the
+browser's account menu):
+
+| File | What it should show |
+|---|---|
+| `shopify-app-scopes.png` | Dev Dashboard: the app's version with its 7 Admin API scopes and custom distribution (no secret on screen) |
+| `shopify-products.png` | Store admin, Products filtered by tag `p8-synthetic`: the 19 products, EGP prices, stock |
+| `shopify-orders.png` | Store admin, Orders filtered by tag `p8-synthetic`: dates spread over 30 days, `@example.com` buyers |
+| `wf-orders-sync-shopify.png` | WF1 canvas with the "Shopify store?" switch and the GraphQL loop (token → fetch → route → wait/apply) |
+| `wf-shopify-token.png` | The "P8 · Shopify token" sub-workflow canvas (cache hit vs. fetch + store) |
+| `n8n-execution-shopify.png` | A failed WF1 execution in Shopify mode, e.g. with a wrong `SHOPIFY_SHOP` (successful and manual runs are not saved) |
+| `email-low-stock-shopify.png` | The low-stock email from the live run listing SKU-1010 |
+| `shopify-order-1151.png` | The live-test order #1151 in the store admin, cancelled with restock |
